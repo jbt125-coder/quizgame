@@ -149,8 +149,7 @@ background: rgba(0,0,0,0.25); display: flex; align-items: center; justify-conten
 }
 .tile-0 { background: #E4572E; }
 .tile-1 { background: #2E86AB; }
-.tile-2 { background: #F4A300; color: #16181F; }
-.tile-2 .letter { background: rgba(0,0,0,0.15); }
+.tile-2 { background: #F4A300; }
 .tile-3 { background: #3FA34D; }
 .ans-tile.dimmed { opacity: 0.35; }
 .ans-tile.picked { outline: 4px solid #fff; outline-offset: -4px; }
@@ -421,6 +420,7 @@ Answer: B"></textarea>
   var questionStartTime = 0;
   var answersThisRound = {};
   var hostPick = null;
+  var hostPickTime = 0;
   var hostAnswerLocked = false;
   var hostScore = 0;
 
@@ -490,8 +490,17 @@ Answer: B"></textarea>
       if (answersThisRound[pid]) return;
       answersThisRound[pid] = { choice: data.choice, timeMs: Date.now() - questionStartTime };
       updateHostAnsweredCount();
+      checkAllPlayersAnswered();
       return;
     }
+  }
+  function checkAllPlayersAnswered() {
+    var keys = Object.keys(connections);
+    if (keys.length === 0) return; // solo host - nothing to wait on early
+    for (var i = 0; i < keys.length; i++) {
+      if (!answersThisRound[keys[i]]) return;
+    }
+    revealNow();
   }
   function handlePlayerLeave(conn) {
     delete connections[conn.peer];
@@ -570,10 +579,25 @@ Answer: B"></textarea>
     $("parsed-count").textContent = parsed.length + " parsed";
     return parsed;
   }
-  $("question-input").addEventListener("input", refreshParsedCount);
+
+  /* ---------- persist pasted questions across reloads ---------- */
+  var QUESTIONS_STORAGE_KEY = "buzzerroom-saved-questions";
+  (function loadSavedQuestions() {
+    try {
+      var saved = localStorage.getItem(QUESTIONS_STORAGE_KEY);
+      if (saved) $("question-input").value = saved;
+    } catch (e) {}
+  })();
+  refreshParsedCount();
+
+  $("question-input").addEventListener("input", function () {
+    refreshParsedCount();
+    try { localStorage.setItem(QUESTIONS_STORAGE_KEY, $("question-input").value); } catch (e) {}
+  });
   $("btn-clear").addEventListener("click", function () {
     $("question-input").value = "";
     refreshParsedCount();
+    try { localStorage.removeItem(QUESTIONS_STORAGE_KEY); } catch (e) {}
   });
 
   /* ---------- game flow ---------- */
@@ -608,6 +632,7 @@ Answer: B"></textarea>
     var q = questions[currentQ];
     answersThisRound = {};
     hostPick = null;
+    hostPickTime = 0;
     hostAnswerLocked = false;
     phase = "question";
 
@@ -640,6 +665,7 @@ Answer: B"></textarea>
   function hostChoose(idx) {
     if (hostAnswerLocked) return;
     hostPick = idx;
+    hostPickTime = Date.now();
     // the host's screen is the shared/projected display, so unlike players (who answer
     // on their own private phones) the tile is never highlighted - that would show the
     // whole room which answer the host picked before the reveal.
@@ -688,7 +714,7 @@ Answer: B"></textarea>
     var maxMs = TIMER_SECONDS * 1000;
 
     if (hostPick !== null) {
-      answersThisRound["__HOST__"] = { choice: hostPick, timeMs: Date.now() - questionStartTime };
+      answersThisRound["__HOST__"] = { choice: hostPick, timeMs: hostPickTime - questionStartTime };
     }
 
     var pids = Object.keys(answersThisRound);
@@ -746,7 +772,12 @@ Answer: B"></textarea>
     var isLastRound = timeUp || !moreQuestions;
 
     renderScoreboard(isLastRound ? "Final Standings" : "Standings");
-    broadcast({ type: "scoreboard", isLast: isLastRound, seconds: SCOREBOARD_PAUSE_SECONDS });
+    broadcast({
+      type: "scoreboard",
+      isLast: isLastRound,
+      seconds: SCOREBOARD_PAUSE_SECONDS,
+      rows: buildStandingsRows("Host")
+    });
     show("screen-scoreboard");
 
     if (isLastRound) {
@@ -771,20 +802,18 @@ Answer: B"></textarea>
     }, 1000);
   }
 
-  function buildStandingsRows() {
+  function buildStandingsRows(hostLabel) {
     var rows = [];
     var keys = Object.keys(connections);
     for (var i = 0; i < keys.length; i++) {
       rows.push({ name: connections[keys[i]].name, score: connections[keys[i]].score, isHost: false });
     }
-    rows.push({ name: "You (Host)", score: hostScore, isHost: true });
+    rows.push({ name: hostLabel, score: hostScore, isHost: true });
     rows.sort(function (a, b) { return b.score - a.score; });
     return rows;
   }
 
-  function renderScoreboard(heading) {
-    $("sb-heading").textContent = heading;
-    var rows = buildStandingsRows();
+  function buildStandingsHtml(rows) {
     var html = "";
     for (var r = 0; r < rows.length; r++) {
       var rankClass = r === 0 ? " rank-1" : r === 1 ? " rank-2" : r === 2 ? " rank-3" : "";
@@ -794,23 +823,18 @@ Answer: B"></textarea>
         '<div class="board-score">' + rows[r].score + '</div>' +
         '</div>';
     }
-    $("sb-list").innerHTML = html;
+    return html;
+  }
+
+  function renderScoreboard(heading) {
+    $("sb-heading").textContent = heading;
+    $("sb-list").innerHTML = buildStandingsHtml(buildStandingsRows("You (Host)"));
   }
 
   function finishGame() {
     clearInterval(timerHandle);
     broadcast({ type: "game_over" });
-    var rows = buildStandingsRows();
-    var html = "";
-    for (var r = 0; r < rows.length; r++) {
-      var rankClass = r === 0 ? " rank-1" : r === 1 ? " rank-2" : r === 2 ? " rank-3" : "";
-      html += '<div class="board-row' + rankClass + (rows[r].isHost ? " host-row" : "") + '">' +
-        '<div class="board-rank">' + (r + 1) + '</div>' +
-        '<div class="board-name">' + escapeHtml(rows[r].name) + '</div>' +
-        '<div class="board-score">' + rows[r].score + '</div>' +
-        '</div>';
-    }
-    $("over-host-board").innerHTML = html;
+    $("over-host-board").innerHTML = buildStandingsHtml(buildStandingsRows("You (Host)"));
     $("over-player-score").style.display = "none";
     $("screen-over").className = "screen active";
     var others = document.getElementsByClassName("screen");
@@ -902,7 +926,7 @@ Answer: B"></textarea>
     }
     if (data.type === "question") { startPlayerQuestion(data); return; }
     if (data.type === "reveal") { showPlayerReveal(data); return; }
-    if (data.type === "scoreboard") { showPlayerScoreboard(); return; }
+    if (data.type === "scoreboard") { showPlayerScoreboard(data.rows); return; }
     if (data.type === "game_over") { showPlayerGameOver(); return; }
   }
 
@@ -979,11 +1003,9 @@ Answer: B"></textarea>
     }
   }
 
-  function showPlayerScoreboard() {
+  function showPlayerScoreboard(rows) {
     $("sb-heading").textContent = "Standings";
-    // player doesn't get full roster (privacy/simplicity) - show their own score big
-    $("sb-list").innerHTML =
-      '<div class="board-row rank-1"><div class="board-rank">You</div><div class="board-name">Your score</div><div class="board-score">' + myScore + '</div></div>';
+    $("sb-list").innerHTML = buildStandingsHtml(rows || []);
     show("screen-scoreboard");
   }
 
