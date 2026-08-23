@@ -7,6 +7,7 @@
 <title>Buzzer Room</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
@@ -214,6 +215,19 @@ padding: 24px; max-width: 340px; width: 100%; text-align: center;
 .modal-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
 .modal-body { color: #8B93A7; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
 .modal-actions { display: flex; gap: 10px; }
+
+/* ============ EDIT QUESTIONS LIST ============ */
+.eq-row {
+background: #1A1E29; border: 1px solid #2A2F3D; border-radius: 10px;
+padding: 10px 12px; margin-bottom: 8px; cursor: pointer; font-size: 14px;
+display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.eq-row .eq-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.eq-row .eq-badge { font-size: 11px; color: #3FD6B0; font-weight: 700; flex-shrink: 0; }
+
+/* ============ YOUTUBE PLAYER ============ */
+#yt-player-wrap { border-radius: 12px; overflow: hidden; }
+#yt-player { width: 100%; aspect-ratio: 16/9; }
 .modal-actions button { flex: 1; }
 
 ::-webkit-scrollbar { display: none; }
@@ -281,6 +295,24 @@ D) Saturn
 Answer: B"></textarea>
 <div class="format-hint">Format: question line, then A) B) C) D) choices, then "Answer: X". Blank lines between questions are optional - paste them jammed together and they'll still be detected. Game runs questions in order until time runs out.</div>
 
+<div class="qbox-label">
+  <span style="font-weight:800; font-size:15px;">GIF rewards (optional)</span>
+  <span class="count-pill" id="gif-count">0 added</span>
+</div>
+<textarea id="gif-input" rows="3" placeholder="https://example.com/party.gif
+https://example.com/dance.gif"></textarea>
+<div class="format-hint">One link per line. Answering 2 questions in a row correctly earns a player (or you) a chance to play a random one on your screen before the scoreboard.</div>
+
+<div class="qbox-label">
+  <span style="font-weight:800; font-size:15px;">Soundtrack (optional)</span>
+  <span class="count-pill" id="music-count">0 added</span>
+</div>
+<textarea id="music-input" rows="3" placeholder="https://www.youtube.com/watch?v=..."></textarea>
+<div class="format-hint">One YouTube link per line. Plays on your screen only, starting when the game begins - you can pause or skip to the next song while playing.</div>
+<div id="yt-player-wrap" style="display:none; margin-bottom:18px;">
+  <div id="yt-player"></div>
+</div>
+
 <div class="footer-actions">
   <button class="btn-ghost" id="btn-clear">Clear</button>
   <button class="btn-primary" id="btn-start" style="flex:2;">Start Game</button>
@@ -328,8 +360,13 @@ Answer: B"></textarea>
       <div class="ans-tile tile-3" data-idx="3"><div class="letter">D</div><div class="atext">Choice D</div></div>
     </div>
     <div id="locked-msg">Answer locked in - waiting for reveal...</div>
+    <div id="paused-indicator" style="display:none; text-align:center; color:#FFC531; font-weight:800; margin-top:14px;">Game paused</div>
+    <button class="btn-primary" id="btn-play-gif" style="display:none; margin-top:14px;">Play a GIF!</button>
 
 <div id="host-strip">
+  <button class="btn-ghost" id="btn-pause-game">Pause</button>
+  <button class="btn-ghost" id="btn-skip-song">Skip Song</button>
+  <button class="btn-ghost" id="btn-edit-questions">Edit Qs</button>
   <button class="btn-ghost" id="btn-reveal-now">Reveal Now</button>
 </div>
 <div class="host-strip-info" id="host-strip-info">
@@ -382,6 +419,47 @@ Answer: B"></textarea>
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-inactivity-leave">Leave Game</button>
       <button class="btn-primary" id="btn-inactivity-stay">I'm Still Here</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== GIF OVERLAY (host screen only) ===================== -->
+
+<div class="modal-overlay" id="gif-overlay">
+  <div class="modal-card" style="max-width:420px; padding:16px;">
+    <img id="gif-overlay-img" src="" alt="" style="width:100%; border-radius:12px; display:block;">
+  </div>
+</div>
+
+<!-- ===================== EDIT QUESTIONS MODAL (host only) ===================== -->
+
+<div class="modal-overlay" id="edit-questions-modal">
+  <div class="modal-card" style="max-width:420px; text-align:left; max-height:80vh; overflow-y:auto;">
+    <div id="eq-list-view">
+      <div class="modal-title" style="text-align:center;">Edit Questions</div>
+      <div id="eq-list"></div>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn-ghost" id="btn-eq-close" style="flex:1;">Close</button>
+      </div>
+    </div>
+    <div id="eq-edit-view" style="display:none;">
+      <div class="modal-title" style="text-align:center;">Edit Question</div>
+      <input id="eq-text-input" placeholder="Question text" style="margin-bottom:10px;">
+      <input id="eq-choice-0" placeholder="Choice A" style="margin-bottom:10px;">
+      <input id="eq-choice-1" placeholder="Choice B" style="margin-bottom:10px;">
+      <input id="eq-choice-2" placeholder="Choice C" style="margin-bottom:10px;">
+      <input id="eq-choice-3" placeholder="Choice D" style="margin-bottom:16px;">
+      <div style="font-weight:800; font-size:14px; margin-bottom:8px;">Correct answer</div>
+      <div class="duration-row" id="eq-letter-row" style="margin-bottom:16px;">
+        <button type="button" class="duration-btn" data-letter-idx="0">A</button>
+        <button type="button" class="duration-btn" data-letter-idx="1">B</button>
+        <button type="button" class="duration-btn" data-letter-idx="2">C</button>
+        <button type="button" class="duration-btn" data-letter-idx="3">D</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="btn-eq-cancel">Cancel</button>
+        <button class="btn-primary" id="btn-eq-save">Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -462,6 +540,7 @@ Answer: B"></textarea>
     mode = "host";
     show("screen-setup");
     initHostPeer();
+    ensureYtPlayer();
   });
   $("btn-be-player").addEventListener("click", function () {
     mode = "player";
@@ -487,6 +566,7 @@ Answer: B"></textarea>
   var roomCode = "";
   var passcode = "";
   var connections = {}; // peerId -> {conn, name, score}
+  var parsedQuestions = []; // stable question bank, in original paste order - edits mutate these objects in place
   var questions = [];
   var currentQ = -1;
   var phase = "lobby";
@@ -505,6 +585,25 @@ Answer: B"></textarea>
   var hostInactivityTimer = null;
   var INACTIVITY_MISS_THRESHOLD = 3;
   var INACTIVITY_RESPONSE_MS = 10000;
+
+  /* ---------- GIF rewards ---------- */
+  var gifLinks = [];
+  var gifWindowOpen = false;
+  var gifPlayedThisRound = false;
+  var gifWindowTimer = null;
+  var hostCorrectStreak = 0;
+  var hostGifEligible = false;
+  var GIF_STREAK_THRESHOLD = 2;
+  var GIF_WINDOW_MS = 5000;
+  var GIF_DISPLAY_MS = 4000;
+
+  /* ---------- soundtrack + pause ---------- */
+  var musicVideoIds = [];
+  var musicIndex = 0;
+  var ytPlayer = null;
+  var ytApiReady = false;
+  var gamePaused = false;
+  var pausedRemainingSeconds = 0;
 
   document.getElementById("dur-5").addEventListener("click", function () { selectDuration(5); });
   document.getElementById("dur-10").addEventListener("click", function () { selectDuration(10); });
@@ -557,7 +656,7 @@ Answer: B"></textarea>
     if (data.type === "join_request") {
       if (data.passcode !== passcode) { conn.send({ type: "join_denied" }); return; }
       var name = (data.name || "Player").substring(0, 16);
-      connections[conn.peer] = { conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null };
+      connections[conn.peer] = { conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null, correctStreak: 0 };
       conn.send({ type: "join_accepted" });
       renderLobby();
       if (phase === "question" || phase === "scoreboard") {
@@ -567,12 +666,17 @@ Answer: B"></textarea>
     }
 
     if (data.type === "submit_answer") {
-      if (phase !== "question") return;
+      if (phase !== "question" || gamePaused) return;
       var pid = conn.peer;
       if (answersThisRound[pid]) return;
       answersThisRound[pid] = { choice: data.choice, timeMs: Date.now() - questionStartTime };
       updateHostAnsweredCount();
       checkAllPlayersAnswered();
+      return;
+    }
+
+    if (data.type === "gif_trigger") {
+      tryPlayGif();
       return;
     }
 
@@ -746,6 +850,27 @@ Answer: B"></textarea>
     return parsed;
   }
 
+  function parseLinkList(raw) {
+    var lines = raw.split("\n");
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      if (t.length > 0) out.push(t);
+    }
+    return out;
+  }
+  function extractYouTubeId(url) {
+    var m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/);
+    return m ? m[1] : null;
+  }
+  $("gif-input").addEventListener("input", function () {
+    $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
+  });
+  $("music-input").addEventListener("input", function () {
+    var ids = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
+    $("music-count").textContent = ids.length + " added";
+  });
+
   /* ---------- persist pasted questions across reloads ---------- */
   var QUESTIONS_STORAGE_KEY = "buzzerroom-saved-questions";
   (function loadSavedQuestions() {
@@ -773,15 +898,28 @@ Answer: B"></textarea>
     if (Object.keys(connections).length === 0) {
       if (!confirm("No players have joined yet. Start anyway?")) return;
     }
-    questions = shuffle(parsed);
+    parsedQuestions = parsed; // stable bank in paste order - edits mutate these objects in place
+    questions = shuffle(parsedQuestions);
     currentQ = -1;
     hostScore = 0;
     hostMissedStreak = 0;
     hostOptedOut = false;
+    hostCorrectStreak = 0;
+    hostGifEligible = false;
     gameEndsAt = Date.now() + gameDurationMs;
+    gamePaused = false;
 
     var startKeys = Object.keys(connections);
-    for (var s = 0; s < startKeys.length; s++) { connections[startKeys[s]].missedStreak = 0; }
+    for (var s = 0; s < startKeys.length; s++) {
+      connections[startKeys[s]].missedStreak = 0;
+      connections[startKeys[s]].correctStreak = 0;
+      connections[startKeys[s]].gifEligible = false;
+    }
+
+    gifLinks = parseLinkList($("gif-input").value);
+    musicVideoIds = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
+    musicIndex = 0;
+    startMusic();
 
     // show host control strip during questions
     $("host-strip").style.display = "flex";
@@ -807,16 +945,19 @@ Answer: B"></textarea>
     hostAnswerLocked = false;
     phase = "question";
 
+    clearTimeout(gifWindowTimer);
+    gifWindowOpen = false;
+    gifPlayedThisRound = false;
+    $("btn-play-gif").style.display = "none";
+    gamePaused = false;
+    $("btn-pause-game").textContent = "Pause";
+    $("paused-indicator").style.display = "none";
+
     $("q-progress").textContent = "QUESTION " + (currentQ + 1);
     $("q-text").textContent = q.text;
     $("locked-msg").style.display = "none";
 
-    var tiles = document.querySelectorAll(".ans-tile");
-    for (var i = 0; i < tiles.length; i++) {
-      tiles[i].className = tiles[i].className.replace(/ (picked|dimmed|was-correct)/g, "");
-      tiles[i].querySelector(".atext").textContent = q.choices[i];
-      tiles[i].onclick = (function (idx) { return function () { hostChoose(idx); }; })(i);
-    }
+    renderAnswerTiles(q.choices, hostChoose);
 
     updateHostAnsweredCount();
     show("screen-question");
@@ -834,7 +975,7 @@ Answer: B"></textarea>
   }
 
   function hostChoose(idx) {
-    if (hostAnswerLocked) return;
+    if (hostAnswerLocked || gamePaused) return;
     hostPick = idx;
     hostPickTime = Date.now();
     hostOptedOut = false; // answering means they're back in, even if they'd opted out earlier
@@ -845,22 +986,91 @@ Answer: B"></textarea>
     checkAllPlayersAnswered(); // host may be the last one needed to trigger the early reveal
   }
 
-  function startTimer() {
+  var timerRemainingSeconds = TIMER_SECONDS;
+  function startTimer(startRemaining) {
     var total = TIMER_SECONDS;
+    var beganAt = (typeof startRemaining === "number") ? startRemaining : total;
+    timerRemainingSeconds = beganAt;
     clearInterval(timerHandle);
     var startedAt = Date.now();
-    updateTimerDisplay(total, total);
+    updateTimerDisplay(beganAt, total);
 
     timerHandle = setInterval(function () {
       var elapsedSec = (Date.now() - startedAt) / 1000;
-      var remaining = Math.max(0, total - elapsedSec);
-      updateTimerDisplay(remaining, total);
-      if (remaining <= 0) {
+      timerRemainingSeconds = Math.max(0, beganAt - elapsedSec);
+      updateTimerDisplay(timerRemainingSeconds, total);
+      if (timerRemainingSeconds <= 0) {
         clearInterval(timerHandle);
         revealNow();
       }
     }, 100);
   }
+
+  /* ---------- pause the whole round (timer + answering + music) ---------- */
+  $("btn-pause-game").addEventListener("click", function () {
+    if (phase !== "question") return;
+    if (gamePaused) resumeGame(); else pauseGame();
+  });
+  function pauseGame() {
+    if (gamePaused || phase !== "question") return;
+    gamePaused = true;
+    clearInterval(timerHandle);
+    pausedRemainingSeconds = timerRemainingSeconds;
+    if (ytPlayer && ytPlayerReady) { try { ytPlayer.pauseVideo(); } catch (e) {} }
+    $("btn-pause-game").textContent = "Resume";
+    $("paused-indicator").style.display = "block";
+    broadcast({ type: "game_paused" });
+  }
+  function resumeGame() {
+    if (!gamePaused) return;
+    gamePaused = false;
+    if (ytPlayer && ytPlayerReady) { try { ytPlayer.playVideo(); } catch (e) {} }
+    $("btn-pause-game").textContent = "Pause";
+    $("paused-indicator").style.display = "none";
+    startTimer(pausedRemainingSeconds);
+    broadcast({ type: "game_resumed", remainingSeconds: pausedRemainingSeconds });
+  }
+
+  /* ---------- soundtrack ---------- */
+  var ytPlayerReady = false;
+  window.onYouTubeIframeAPIReady = function () {
+    ytApiReady = true;
+    if (mode === "host") ensureYtPlayer();
+  };
+  function ensureYtPlayer() {
+    if (ytPlayer || !ytApiReady || typeof YT === "undefined") return;
+    ytPlayer = new YT.Player("yt-player", {
+      height: "100%",
+      width: "100%",
+      playerVars: { rel: 0 },
+      events: {
+        onReady: function () {
+          ytPlayerReady = true;
+          if (musicVideoIds.length > 0 && phase !== "lobby") playCurrentSong();
+        },
+        onStateChange: function (e) {
+          if (e.data === YT.PlayerState.ENDED) skipSong();
+        }
+      }
+    });
+  }
+  function startMusic() {
+    $("yt-player-wrap").style.display = musicVideoIds.length > 0 ? "block" : "none";
+    if (musicVideoIds.length === 0) return;
+    ensureYtPlayer();
+    playCurrentSong();
+  }
+  function playCurrentSong() {
+    if (!ytPlayerReady || musicVideoIds.length === 0) return;
+    try { ytPlayer.loadVideoById(musicVideoIds[musicIndex]); } catch (e) {}
+  }
+  function skipSong() {
+    if (musicVideoIds.length === 0) return;
+    musicIndex = (musicIndex + 1) % musicVideoIds.length;
+    playCurrentSong();
+  }
+  $("btn-skip-song").addEventListener("click", skipSong);
+
   function updateTimerDisplay(remaining, total) {
     var badge = $("timer-badge");
     badge.textContent = Math.ceil(remaining);
@@ -913,6 +1123,8 @@ Answer: B"></textarea>
       roundResults.push({ id: pid, correct: isCorrect, choice: a.choice, points: points });
     }
 
+    updateGifStreaksAndEligibility(roundResults);
+
     // tell each connected player their result (including non-answerers)
     var allIds = Object.keys(connections);
     for (var k = 0; k < allIds.length; k++) {
@@ -921,9 +1133,9 @@ Answer: B"></textarea>
       for (var z = 0; z < roundResults.length; z++) { if (roundResults[z].id === pk) r = roundResults[z]; }
       var payload;
       if (r) {
-        payload = { type: "reveal", correctIndex: q.correct, yourChoice: r.choice, correct: r.correct, pointsEarned: r.points, totalScore: connections[pk].score };
+        payload = { type: "reveal", correctIndex: q.correct, yourChoice: r.choice, correct: r.correct, pointsEarned: r.points, totalScore: connections[pk].score, gifEligible: connections[pk].gifEligible };
       } else {
-        payload = { type: "reveal", correctIndex: q.correct, yourChoice: -1, correct: false, pointsEarned: 0, totalScore: connections[pk].score };
+        payload = { type: "reveal", correctIndex: q.correct, yourChoice: -1, correct: false, pointsEarned: 0, totalScore: connections[pk].score, gifEligible: connections[pk].gifEligible };
       }
       try { connections[pk].conn.send(payload); } catch (e) {}
     }
@@ -935,10 +1147,68 @@ Answer: B"></textarea>
       if (idx === q.correct) tiles[t].className += " was-correct";
     }
 
+    $("btn-play-gif").style.display = (hostGifEligible && mode === "host") ? "block" : "none";
+
     setTimeout(function () {
-      goToScoreboard();
+      if (!anyoneGifEligibleThisRound) { goToScoreboard(); return; }
+      openGifWindow();
     }, 1200);
   }
+
+  /* ---------- GIF rewards: answer 2+ correct in a row -> earn a chance to trigger a random GIF ---------- */
+  var anyoneGifEligibleThisRound = false;
+  function updateGifStreaksAndEligibility(roundResults) {
+    anyoneGifEligibleThisRound = false;
+    var keys = Object.keys(connections);
+    for (var i = 0; i < keys.length; i++) {
+      var pid = keys[i];
+      var c = connections[pid];
+      var r = null;
+      for (var z = 0; z < roundResults.length; z++) { if (roundResults[z].id === pid) r = roundResults[z]; }
+      c.correctStreak = (r && r.correct) ? c.correctStreak + 1 : 0;
+      c.gifEligible = c.correctStreak >= GIF_STREAK_THRESHOLD && gifLinks.length > 0;
+      if (c.gifEligible) anyoneGifEligibleThisRound = true;
+    }
+    var hostResult = null;
+    for (var y = 0; y < roundResults.length; y++) { if (roundResults[y].id === "__HOST__") hostResult = roundResults[y]; }
+    hostCorrectStreak = (hostResult && hostResult.correct) ? hostCorrectStreak + 1 : 0;
+    hostGifEligible = hostCorrectStreak >= GIF_STREAK_THRESHOLD && gifLinks.length > 0;
+    if (hostGifEligible) anyoneGifEligibleThisRound = true;
+  }
+  function openGifWindow() {
+    gifWindowOpen = true;
+    gifWindowTimer = setTimeout(function () {
+      gifWindowOpen = false;
+      hideGifButtons();
+      if (!gifPlayedThisRound) goToScoreboard();
+    }, GIF_WINDOW_MS);
+  }
+  function hideGifButtons() {
+    $("btn-play-gif").style.display = "none";
+    broadcast({ type: "gif_used" });
+  }
+  function tryPlayGif() {
+    if (!gifWindowOpen || gifPlayedThisRound || gifLinks.length === 0) return;
+    gifPlayedThisRound = true;
+    gifWindowOpen = false;
+    clearTimeout(gifWindowTimer);
+    hideGifButtons();
+    var url = gifLinks[Math.floor(Math.random() * gifLinks.length)];
+    $("gif-overlay-img").src = url;
+    $("gif-overlay").className = "modal-overlay active";
+    setTimeout(function () {
+      $("gif-overlay").className = "modal-overlay";
+      goToScoreboard();
+    }, GIF_DISPLAY_MS);
+  }
+  $("btn-play-gif").addEventListener("click", function () {
+    $("btn-play-gif").style.display = "none";
+    if (mode === "host") {
+      tryPlayGif();
+    } else if (mode === "player" && playerConn) {
+      playerConn.send({ type: "gif_trigger" });
+    }
+  });
 
   function goToScoreboard() {
     phase = "scoreboard";
@@ -1051,12 +1321,111 @@ Answer: B"></textarea>
     for (var i = 0; i < others.length; i++) if (others[i].id !== "screen-over") others[i].className = "screen";
   }
 
+  /* ---------- permanently editing a question mid-game ---------- */
+  var LETTERS = ["A", "B", "C", "D"];
+  function serializeQuestionsToText(qs) {
+    var blocks = [];
+    for (var i = 0; i < qs.length; i++) {
+      var q = qs[i];
+      var lines = [q.text];
+      for (var c = 0; c < 4; c++) lines.push(LETTERS[c] + ") " + q.choices[c]);
+      lines.push("Answer: " + LETTERS[q.correct]);
+      blocks.push(lines.join("\n"));
+    }
+    return blocks.join("\n\n");
+  }
+  function persistQuestionBank() {
+    var text = serializeQuestionsToText(parsedQuestions);
+    $("question-input").value = text;
+    refreshParsedCount();
+    try { localStorage.setItem(QUESTIONS_STORAGE_KEY, text); } catch (e) {}
+  }
+  function renderAnswerTiles(choices, onClick) {
+    var tiles = document.querySelectorAll(".ans-tile");
+    for (var i = 0; i < tiles.length; i++) {
+      tiles[i].className = tiles[i].className.replace(/ (picked|dimmed|was-correct)/g, "");
+      tiles[i].querySelector(".atext").textContent = choices[i];
+      tiles[i].onclick = (function (idx) { return function () { onClick(idx); }; })(i);
+    }
+  }
+
+  var eqEditingIndex = -1;
+  var eqSelectedLetter = 0;
+
+  function openEditQuestionsModal() {
+    renderEqList();
+    $("eq-list-view").style.display = "block";
+    $("eq-edit-view").style.display = "none";
+    $("edit-questions-modal").className = "modal-overlay active";
+  }
+  function renderEqList() {
+    var html = "";
+    for (var i = 0; i < parsedQuestions.length; i++) {
+      var q = parsedQuestions[i];
+      var gameIdx = questions.indexOf(q);
+      var asked = gameIdx !== -1 && gameIdx <= currentQ;
+      html += '<div class="eq-row" data-index="' + i + '"><span class="eq-text">' + escapeHtml(q.text) + '</span>' +
+        (asked ? '<span class="eq-badge">Asked</span>' : '') + '</div>';
+    }
+    $("eq-list").innerHTML = html || '<div style="color:#5B6478; font-size:13px;">No questions yet.</div>';
+  }
+  $("eq-list").addEventListener("click", function (e) {
+    var row = e.target.closest(".eq-row");
+    if (!row) return;
+    openEqEditForm(parseInt(row.getAttribute("data-index"), 10));
+  });
+  function openEqEditForm(index) {
+    eqEditingIndex = index;
+    var q = parsedQuestions[index];
+    $("eq-text-input").value = q.text;
+    for (var c = 0; c < 4; c++) $("eq-choice-" + c).value = q.choices[c];
+    setEqLetterSelected(q.correct);
+    $("eq-list-view").style.display = "none";
+    $("eq-edit-view").style.display = "block";
+  }
+  function setEqLetterSelected(idx) {
+    eqSelectedLetter = idx;
+    var btns = document.querySelectorAll("#eq-letter-row .duration-btn");
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].className = "duration-btn" + (i === idx ? " selected" : "");
+    }
+  }
+  var eqLetterBtns = document.querySelectorAll("#eq-letter-row .duration-btn");
+  for (var eqi = 0; eqi < eqLetterBtns.length; eqi++) {
+    (function (idx) {
+      eqLetterBtns[idx].addEventListener("click", function () { setEqLetterSelected(idx); });
+    })(eqi);
+  }
+  $("btn-eq-save").addEventListener("click", function () {
+    var text = $("eq-text-input").value.trim();
+    var choices = [];
+    for (var c = 0; c < 4; c++) choices.push($("eq-choice-" + c).value.trim());
+    if (!text || choices.indexOf("") !== -1) { alert("Fill in the question and all four choices."); return; }
+    var q = parsedQuestions[eqEditingIndex];
+    q.text = text;
+    q.choices = choices;
+    q.correct = eqSelectedLetter;
+    persistQuestionBank();
+    if (phase === "question" && currentQ >= 0 && questions[currentQ] === q) {
+      $("q-text").textContent = q.text;
+      renderAnswerTiles(q.choices, hostChoose);
+    }
+    openEditQuestionsModal();
+  });
+  $("btn-eq-cancel").addEventListener("click", openEditQuestionsModal);
+  $("btn-eq-close").addEventListener("click", function () {
+    $("edit-questions-modal").className = "modal-overlay";
+  });
+  $("btn-edit-questions").addEventListener("click", openEditQuestionsModal);
+
   /* =========================================================
      PLAYER LOGIC
   ========================================================= */
   var myScore = 0;
   var hasAnsweredThisRound = false;
   var playerTimerHandle = null;
+  var playerTimerRemainingSeconds = TIMER_SECONDS;
+  var playerPaused = false;
 
   $("room-input").addEventListener("input", function (e) {
     e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").substring(0, 5);
@@ -1143,38 +1512,41 @@ Answer: B"></textarea>
       return;
     }
     if (data.type === "dropped") { showPlayerDropped(data.reason); return; }
+    if (data.type === "gif_used") { $("btn-play-gif").style.display = "none"; return; }
+    if (data.type === "game_paused") { pauseAsPlayer(); return; }
+    if (data.type === "game_resumed") { resumeAsPlayer(data.remainingSeconds); return; }
   }
 
   function startPlayerQuestion(data) {
     hasAnsweredThisRound = false;
+    playerPaused = false;
+    $("paused-indicator").style.display = "none";
     $("q-progress").textContent = "QUESTION " + (data.index + 1);
     $("q-text").textContent = data.text;
     $("locked-msg").style.display = "none";
+    $("btn-play-gif").style.display = "none";
     $("host-strip").style.display = "none";
     $("host-strip-info").style.display = "none";
 
-    var tiles = document.querySelectorAll(".ans-tile");
-    for (var i = 0; i < tiles.length; i++) {
-      tiles[i].className = tiles[i].className.replace(/ (picked|dimmed|was-correct)/g, "");
-      tiles[i].querySelector(".atext").textContent = data.choices[i];
-      tiles[i].onclick = (function (idx) { return function () { submitPlayerAnswer(idx); }; })(i);
-    }
+    renderAnswerTiles(data.choices, submitPlayerAnswer);
 
     show("screen-question");
     runPlayerTimer(data.seconds);
   }
 
-  function runPlayerTimer(totalSeconds) {
+  function runPlayerTimer(totalSeconds, startRemaining) {
     clearInterval(playerTimerHandle);
+    var beganAt = (typeof startRemaining === "number") ? startRemaining : totalSeconds;
+    playerTimerRemainingSeconds = beganAt;
     var startedAt = Date.now();
     var badge = $("timer-badge");
 
     function tick() {
       var elapsed = (Date.now() - startedAt) / 1000;
-      var remaining = Math.max(0, totalSeconds - elapsed);
-      badge.textContent = Math.ceil(remaining);
-      badge.className = remaining <= 5 ? "timer-badge urgent" : "timer-badge";
-      if (remaining <= 0) {
+      playerTimerRemainingSeconds = Math.max(0, beganAt - elapsed);
+      badge.textContent = Math.ceil(playerTimerRemainingSeconds);
+      badge.className = playerTimerRemainingSeconds <= 5 ? "timer-badge urgent" : "timer-badge";
+      if (playerTimerRemainingSeconds <= 0) {
         clearInterval(playerTimerHandle);
         lockPlayerAnswers();
       }
@@ -1183,8 +1555,19 @@ Answer: B"></textarea>
     playerTimerHandle = setInterval(tick, 100);
   }
 
+  function pauseAsPlayer() {
+    playerPaused = true;
+    clearInterval(playerTimerHandle);
+    $("paused-indicator").style.display = "block";
+  }
+  function resumeAsPlayer(remainingSeconds) {
+    playerPaused = false;
+    $("paused-indicator").style.display = "none";
+    runPlayerTimer(TIMER_SECONDS, remainingSeconds);
+  }
+
   function submitPlayerAnswer(idx) {
-    if (hasAnsweredThisRound) return;
+    if (hasAnsweredThisRound || playerPaused) return;
     hasAnsweredThisRound = true;
 
     var tiles = document.querySelectorAll(".ans-tile");
@@ -1216,6 +1599,7 @@ Answer: B"></textarea>
       var idx = parseInt(tiles[i].getAttribute("data-idx"), 10);
       if (idx === data.correctIndex) tiles[i].className += " was-correct";
     }
+    $("btn-play-gif").style.display = data.gifEligible ? "block" : "none";
   }
 
   function showPlayerScoreboard(rows, yourRank, yourRow) {
