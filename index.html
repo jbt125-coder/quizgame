@@ -640,13 +640,9 @@ Answer: B"></textarea>
   function hostChoose(idx) {
     if (hostAnswerLocked) return;
     hostPick = idx;
-    var tiles = document.querySelectorAll(".ans-tile");
-    for (var i = 0; i < tiles.length; i++) {
-      var cn = tiles[i].className.replace(/ picked/g, "");
-      if (i === idx) cn += " picked";
-      tiles[i].className = cn;
-    }
-    // host's own pick stays private visually (no correctness shown) until reveal, same as players
+    // the host's screen is the shared/projected display, so unlike players (who answer
+    // on their own private phones) the tile is never highlighted - that would show the
+    // whole room which answer the host picked before the reveal.
     $("locked-msg").style.display = "block";
   }
 
