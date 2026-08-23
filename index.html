@@ -258,7 +258,7 @@ B) Mars
 C) Jupiter
 D) Saturn
 Answer: B"></textarea>
-<div class="format-hint">Format: question line, then A) B) C) D) choices, then “Answer: X”. Blank line between questions. Game runs questions in order until time runs out.</div>
+<div class="format-hint">Format: question line, then A) B) C) D) choices, then "Answer: X". Blank lines between questions are optional - paste them jammed together and they'll still be detected. Game runs questions in order until time runs out.</div>
 
 <div class="footer-actions">
   <button class="btn-ghost" id="btn-clear">Clear</button>
@@ -518,43 +518,51 @@ Answer: B"></textarea>
     }
   }
 
-  /* ---------- parsing ---------- */
+  /* ---------- parsing ----------
+     Streams through every non-blank line and recognizes a question purely by
+     the "text line(s), then A) B) C) D), then Answer: X" pattern repeating -
+     blank lines between questions are not required. */
   function parseQuestions(raw) {
-    var blocks = raw.split(/\n\s*\n/);
+    var rawLines = raw.split("\n");
+    var lines = [];
+    for (var i = 0; i < rawLines.length; i++) {
+      var t = rawLines[i].replace(/\r/g, "").trim();
+      if (t.length > 0) lines.push(t);
+    }
+
     var out = [];
-    for (var b = 0; b < blocks.length; b++) {
-      var lines = blocks[b].split("\n");
-      var cleanLines = [];
-      for (var i = 0; i < lines.length; i++) {
-        var t = lines[i].replace(/\r/g, "").trim();
-        if (t.length > 0) cleanLines.push(t);
-      }
-      if (cleanLines.length < 5) continue;
+    var qTextParts = [];
+    var choices = [];
+    var answerLetter = "";
 
-      var qText = "";
-      var choices = [];
-      var answerLetter = "";
-
-      for (var j = 0; j < cleanLines.length; j++) {
-        var line = cleanLines[j];
-        var m = line.match(/^[A-Da-d][\)\.\:]\s*(.*)$/);
-        var ans = line.match(/^answer\s*[:\-]?\s*([A-Da-d])/i);
-        if (ans) {
-          answerLetter = ans[1].toUpperCase();
-        } else if (m) {
-          choices.push(m[1].trim());
-        } else if (qText === "") {
-          qText = line;
-        } else {
-          qText += " " + line;
-        }
-      }
-
+    function flush() {
+      var qText = qTextParts.join(" ").trim();
       if (qText && choices.length === 4 && answerLetter) {
         var correctIdx = answerLetter.charCodeAt(0) - 65;
         out.push({ text: qText, choices: choices, correct: correctIdx });
       }
+      qTextParts = [];
+      choices = [];
+      answerLetter = "";
     }
+
+    for (var j = 0; j < lines.length; j++) {
+      var line = lines[j];
+      var choiceMatch = line.match(/^[A-Da-d][\)\.\:]\s*(.*)$/);
+      var ansMatch = line.match(/^answer\s*[:\-]?\s*([A-Da-d])/i);
+
+      if (ansMatch) {
+        answerLetter = ansMatch[1].toUpperCase();
+        flush(); // "Answer:" always ends a question - that's the boundary signal
+      } else if (choiceMatch) {
+        choices.push(choiceMatch[1].trim());
+      } else if (choices.length === 0) {
+        qTextParts.push(line); // still accumulating this question's text
+      } else {
+        choices[choices.length - 1] += " " + line; // wrapped continuation of a choice
+      }
+    }
+
     return out;
   }
   function refreshParsedCount() {
