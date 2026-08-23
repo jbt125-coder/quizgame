@@ -215,6 +215,7 @@ padding: 24px; max-width: 340px; width: 100%; text-align: center;
 .modal-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
 .modal-body { color: #8B93A7; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
 .modal-actions { display: flex; gap: 10px; }
+.modal-actions button { flex: 1; }
 
 /* ============ EDIT QUESTIONS LIST ============ */
 .eq-row {
@@ -225,10 +226,28 @@ display: flex; justify-content: space-between; align-items: center; gap: 8px;
 .eq-row .eq-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eq-row .eq-badge { font-size: 11px; color: #3FD6B0; font-weight: 700; flex-shrink: 0; }
 
-/* ============ YOUTUBE PLAYER ============ */
-#yt-player-wrap { border-radius: 12px; overflow: hidden; }
-#yt-player { width: 100%; aspect-ratio: 16/9; }
-.modal-actions button { flex: 1; }
+/* ============ PERSISTENT MUSIC BAR + RETURN TO MENU (host only, float above every screen) ============ */
+#music-bar {
+display: none; position: fixed; right: 12px; bottom: 12px; z-index: 900;
+align-items: center; gap: 8px;
+background: #12151D; border: 1px solid #2A2F3D; border-radius: 12px;
+padding: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+}
+#music-bar.active { display: flex; }
+#yt-player-wrap { width: 120px; aspect-ratio: 16/9; border-radius: 8px; overflow: hidden; flex-shrink: 0; }
+#yt-player { width: 100%; height: 100%; }
+#music-bar-controls { display: flex; flex-direction: column; gap: 4px; }
+#music-bar-controls button {
+background: #1A1E29; border: 1px solid #2A2F3D; color: #C7CCDA;
+border-radius: 8px; padding: 4px 9px; font-size: 14px; cursor: pointer;
+}
+#btn-return-menu {
+display: none; position: fixed; left: 12px; bottom: 12px; z-index: 900;
+background: #1A1E29; color: #FF5C7A; border: 1px solid #2A2F3D;
+border-radius: 10px; padding: 10px 14px; font-size: 13px; font-weight: 700;
+box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+}
+#btn-return-menu.active { display: block; }
 
 ::-webkit-scrollbar { display: none; }
 </style>
@@ -309,9 +328,6 @@ https://example.com/dance.gif"></textarea>
 </div>
 <textarea id="music-input" rows="3" placeholder="https://www.youtube.com/watch?v=..."></textarea>
 <div class="format-hint">One YouTube link per line. Plays on your screen only, starting when the game begins - you can pause or skip to the next song while playing.</div>
-<div id="yt-player-wrap" style="display:none; margin-bottom:18px;">
-  <div id="yt-player"></div>
-</div>
 
 <div class="footer-actions">
   <button class="btn-ghost" id="btn-clear">Clear</button>
@@ -365,7 +381,6 @@ https://example.com/dance.gif"></textarea>
 
 <div id="host-strip">
   <button class="btn-ghost" id="btn-pause-game">Pause</button>
-  <button class="btn-ghost" id="btn-skip-song">Skip Song</button>
   <button class="btn-ghost" id="btn-edit-questions">Edit Qs</button>
   <button class="btn-ghost" id="btn-reveal-now">Reveal Now</button>
 </div>
@@ -408,6 +423,37 @@ https://example.com/dance.gif"></textarea>
     <div style="color:#8B93A7; font-size:14px; text-align:center;" id="dropped-reason">You were removed from the game.</div>
   </div>
 
+</div>
+
+<!-- ===================== PERSISTENT MUSIC BAR (host only) =====================
+     Lives outside the .screen system on purpose - a .screen gets display:none
+     when it's not the active one, and browsers throttle/pause media inside a
+     display:none subtree. Keeping the player here means it's never hidden that
+     way, so the soundtrack doesn't cut out when the active screen changes. -->
+
+<div id="music-bar">
+  <div id="yt-player-wrap"><div id="yt-player"></div></div>
+  <div id="music-bar-controls">
+    <button type="button" id="btn-music-settings" title="Change music">&#9881;</button>
+    <button type="button" id="btn-skip-song-bar" title="Skip song">&#9197;</button>
+  </div>
+</div>
+
+<!-- ===================== RETURN TO MENU (host only) ===================== -->
+
+<button type="button" id="btn-return-menu">&#10005; Menu</button>
+
+<!-- ===================== MUSIC SETTINGS MODAL (host only) ===================== -->
+
+<div class="modal-overlay" id="music-settings-modal">
+  <div class="modal-card" style="max-width:360px; text-align:left;">
+    <div class="modal-title" style="text-align:center;">Change Music</div>
+    <textarea id="music-settings-input" rows="4" placeholder="https://www.youtube.com/watch?v=..." style="margin-bottom:16px;"></textarea>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-music-settings-cancel">Cancel</button>
+      <button class="btn-primary" id="btn-music-settings-save">Save &amp; Play</button>
+    </div>
+  </div>
 </div>
 
 <!-- ===================== INACTIVITY MODAL ===================== -->
@@ -863,27 +909,40 @@ https://example.com/dance.gif"></textarea>
     var m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/);
     return m ? m[1] : null;
   }
+  /* ---------- persist pasted questions, GIF links, and music links across reloads ---------- */
+  var QUESTIONS_STORAGE_KEY = "buzzerroom-saved-questions";
+  var GIFS_STORAGE_KEY = "buzzerroom-saved-gifs";
+  var MUSIC_STORAGE_KEY = "buzzerroom-saved-music";
+
+  function loadSaved(key, el) {
+    try {
+      var saved = localStorage.getItem(key);
+      if (saved) el.value = saved;
+    } catch (e) {}
+  }
+  function saveField(key, el) {
+    try { localStorage.setItem(key, el.value); } catch (e) {}
+  }
+
+  loadSaved(QUESTIONS_STORAGE_KEY, $("question-input"));
+  loadSaved(GIFS_STORAGE_KEY, $("gif-input"));
+  loadSaved(MUSIC_STORAGE_KEY, $("music-input"));
+  refreshParsedCount();
+  $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
+  $("music-count").textContent = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; }).length + " added";
+
   $("gif-input").addEventListener("input", function () {
     $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
+    saveField(GIFS_STORAGE_KEY, $("gif-input"));
   });
   $("music-input").addEventListener("input", function () {
     var ids = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
     $("music-count").textContent = ids.length + " added";
+    saveField(MUSIC_STORAGE_KEY, $("music-input"));
   });
-
-  /* ---------- persist pasted questions across reloads ---------- */
-  var QUESTIONS_STORAGE_KEY = "buzzerroom-saved-questions";
-  (function loadSavedQuestions() {
-    try {
-      var saved = localStorage.getItem(QUESTIONS_STORAGE_KEY);
-      if (saved) $("question-input").value = saved;
-    } catch (e) {}
-  })();
-  refreshParsedCount();
-
   $("question-input").addEventListener("input", function () {
     refreshParsedCount();
-    try { localStorage.setItem(QUESTIONS_STORAGE_KEY, $("question-input").value); } catch (e) {}
+    saveField(QUESTIONS_STORAGE_KEY, $("question-input"));
   });
   $("btn-clear").addEventListener("click", function () {
     $("question-input").value = "";
@@ -924,9 +983,43 @@ https://example.com/dance.gif"></textarea>
     // show host control strip during questions
     $("host-strip").style.display = "flex";
     $("host-strip-info").style.display = "flex";
+    $("btn-return-menu").className = "active";
 
     nextQuestion();
   });
+
+  /* ---------- abandon the live game and go back to the landing screen ---------- */
+  function returnToMenu() {
+    if (!confirm("End this game and return to the menu? This disconnects all players.")) return;
+
+    clearInterval(timerHandle);
+    clearTimeout(gifWindowTimer);
+    clearTimeout(hostInactivityTimer);
+    var ck = Object.keys(connections);
+    for (var i = 0; i < ck.length; i++) {
+      var c = connections[ck[i]];
+      if (c.inactivityTimer) clearTimeout(c.inactivityTimer);
+      try { c.conn.send({ type: "host_ended" }); } catch (e) {}
+    }
+    if (ytPlayer) { try { ytPlayer.stopVideo(); } catch (e) {} }
+    if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+
+    connections = {};
+    parsedQuestions = [];
+    questions = [];
+    currentQ = -1;
+    phase = "lobby";
+    gamePaused = false;
+    renderLobby();
+
+    $("host-strip").style.display = "none";
+    $("host-strip-info").style.display = "none";
+    $("music-bar").className = "";
+    $("btn-return-menu").className = "";
+    mode = null;
+    show("screen-landing");
+  }
+  $("btn-return-menu").addEventListener("click", returnToMenu);
 
   $("btn-reveal-now").addEventListener("click", function () {
     if (phase === "question") revealNow();
@@ -1042,20 +1135,26 @@ https://example.com/dance.gif"></textarea>
     ytPlayer = new YT.Player("yt-player", {
       height: "100%",
       width: "100%",
-      playerVars: { rel: 0 },
+      playerVars: { rel: 0, autoplay: 1, playsinline: 1 },
       events: {
         onReady: function () {
           ytPlayerReady = true;
           if (musicVideoIds.length > 0 && phase !== "lobby") playCurrentSong();
         },
         onStateChange: function (e) {
-          if (e.data === YT.PlayerState.ENDED) skipSong();
+          if (e.data === YT.PlayerState.ENDED) {
+            skipSong();
+          } else if (e.data === YT.PlayerState.PAUSED && !gamePaused) {
+            // something other than our own Pause button paused it (autoplay
+            // policy, a hiccup, etc.) - the host didn't ask for that, so resume
+            try { ytPlayer.playVideo(); } catch (e2) {}
+          }
         }
       }
     });
   }
   function startMusic() {
-    $("yt-player-wrap").style.display = musicVideoIds.length > 0 ? "block" : "none";
+    $("music-bar").className = musicVideoIds.length > 0 ? "active" : "";
     if (musicVideoIds.length === 0) return;
     ensureYtPlayer();
     playCurrentSong();
@@ -1069,7 +1168,27 @@ https://example.com/dance.gif"></textarea>
     musicIndex = (musicIndex + 1) % musicVideoIds.length;
     playCurrentSong();
   }
-  $("btn-skip-song").addEventListener("click", skipSong);
+  $("btn-skip-song-bar").addEventListener("click", skipSong);
+
+  /* ---------- change the music list mid-game ---------- */
+  $("btn-music-settings").addEventListener("click", function () {
+    $("music-settings-input").value = $("music-input").value;
+    $("music-settings-modal").className = "modal-overlay active";
+  });
+  $("btn-music-settings-cancel").addEventListener("click", function () {
+    $("music-settings-modal").className = "modal-overlay";
+  });
+  $("btn-music-settings-save").addEventListener("click", function () {
+    var newText = $("music-settings-input").value;
+    $("music-input").value = newText;
+    saveField(MUSIC_STORAGE_KEY, $("music-input"));
+    $("music-count").textContent = parseLinkList(newText).map(extractYouTubeId).filter(function (id) { return !!id; }).length + " added";
+
+    musicVideoIds = parseLinkList(newText).map(extractYouTubeId).filter(function (id) { return !!id; });
+    musicIndex = 0;
+    $("music-settings-modal").className = "modal-overlay";
+    startMusic();
+  });
 
   function updateTimerDisplay(remaining, total) {
     var badge = $("timer-badge");
@@ -1512,6 +1631,7 @@ https://example.com/dance.gif"></textarea>
       return;
     }
     if (data.type === "dropped") { showPlayerDropped(data.reason); return; }
+    if (data.type === "host_ended") { showPlayerDropped("host_ended"); return; }
     if (data.type === "gif_used") { $("btn-play-gif").style.display = "none"; return; }
     if (data.type === "game_paused") { pauseAsPlayer(); return; }
     if (data.type === "game_resumed") { resumeAsPlayer(data.remainingSeconds); return; }
@@ -1612,9 +1732,11 @@ https://example.com/dance.gif"></textarea>
 
   function showPlayerDropped(reason) {
     clearInterval(playerTimerHandle);
-    $("dropped-reason").textContent = reason === "left"
-      ? "You chose to leave the game."
-      : "You were removed for missing too many questions in a row.";
+    var messages = {
+      left: "You chose to leave the game.",
+      host_ended: "The host ended the game."
+    };
+    $("dropped-reason").textContent = messages[reason] || "You were removed for missing too many questions in a row.";
     show("screen-dropped");
   }
 
