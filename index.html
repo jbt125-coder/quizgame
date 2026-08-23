@@ -227,7 +227,10 @@ display: flex; justify-content: space-between; align-items: center; gap: 8px;
 .eq-row .eq-badge { font-size: 11px; color: #3FD6B0; font-weight: 700; flex-shrink: 0; }
 
 /* ============ GIF PICKER (host setup + player waiting screen) ============ */
-.gif-pick-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.gif-pick-grid {
+display: flex; flex-wrap: wrap; gap: 8px;
+max-height: 260px; overflow-y: auto; padding-right: 4px;
+}
 .gif-pick-item {
 width: 84px; height: 84px; border-radius: 10px; overflow: hidden; cursor: pointer;
 border: 3px solid transparent; background: #1A1E29; flex-shrink: 0;
@@ -478,7 +481,7 @@ https://example.com/dance.gif"></textarea>
 <!-- ===================== HOST GIF PICK MODAL ===================== -->
 
 <div class="modal-overlay" id="host-gif-pick-modal">
-  <div class="modal-card" style="max-width:400px; text-align:left;">
+  <div class="modal-card" style="max-width:400px; text-align:left; max-height:80vh; overflow-y:auto;">
     <div class="modal-title" style="text-align:center;">Pick Your GIF</div>
     <div class="modal-body" style="text-align:center;">Whoever answers a question correctly first each round gets their pick shown here. Choose from what's left, or skip.</div>
     <div id="host-gif-pick-modal-list" class="gif-pick-grid" style="margin-bottom:16px;"></div>
@@ -492,7 +495,7 @@ https://example.com/dance.gif"></textarea>
 <!-- ===================== HOST SONG PICK MODAL ===================== -->
 
 <div class="modal-overlay" id="host-song-pick-modal">
-  <div class="modal-card" style="max-width:400px; text-align:left;">
+  <div class="modal-card" style="max-width:400px; text-align:left; max-height:80vh; overflow-y:auto;">
     <div class="modal-title" style="text-align:center;">Pick Your Steal Song</div>
     <div class="modal-body" style="text-align:center;">Answer 3 in a row and this takes over the soundtrack. Choose from what's left, or skip.</div>
     <div id="host-song-pick-modal-list" class="gif-pick-grid" style="margin-bottom:16px;"></div>
