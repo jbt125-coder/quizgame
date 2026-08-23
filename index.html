@@ -508,6 +508,9 @@ Answer: B"></textarea>
     for (var i = 0; i < keys.length; i++) {
       if (!answersThisRound[keys[i]]) return;
     }
+    // all players are in, but if the host is playing this round too, wait for
+    // their pick as well - don't cut off their chance to answer and score.
+    if (hostPick === null) return;
     revealNow();
   }
   function handlePlayerLeave(conn) {
@@ -678,6 +681,7 @@ Answer: B"></textarea>
     // on their own private phones) the tile is never highlighted - that would show the
     // whole room which answer the host picked before the reveal.
     $("locked-msg").style.display = "block";
+    checkAllPlayersAnswered(); // host may be the last one needed to trigger the early reveal
   }
 
   function startTimer() {
