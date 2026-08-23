@@ -226,6 +226,16 @@ display: flex; justify-content: space-between; align-items: center; gap: 8px;
 .eq-row .eq-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .eq-row .eq-badge { font-size: 11px; color: #3FD6B0; font-weight: 700; flex-shrink: 0; }
 
+/* ============ GIF PICKER (host setup + player waiting screen) ============ */
+.gif-pick-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.gif-pick-item {
+width: 84px; height: 84px; border-radius: 10px; overflow: hidden; cursor: pointer;
+border: 3px solid transparent; background: #1A1E29; flex-shrink: 0;
+}
+.gif-pick-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gif-pick-item.selected { border-color: #3FD6B0; }
+.gif-pick-item.taken { opacity: 0.3; cursor: not-allowed; filter: grayscale(1); }
+
 /* ============ PERSISTENT MUSIC BAR + RETURN TO MENU (host only, float above every screen) ============ */
 #music-bar {
 display: none; position: fixed; right: 12px; bottom: 12px; z-index: 900;
@@ -320,7 +330,7 @@ Answer: B"></textarea>
 </div>
 <textarea id="gif-input" rows="3" placeholder="https://example.com/party.gif
 https://example.com/dance.gif"></textarea>
-<div class="format-hint">One link per line. Answering 2 questions in a row correctly earns a player (or you) a chance to play a random one on your screen before the scoreboard.</div>
+<div class="format-hint">One link per line. Players pick one as their own while waiting for you to start; you'll get a chance to pick yours from what's left right after you click Start Game. Whoever answers a question correctly first each round gets their pick shown on your screen before the scoreboard.</div>
 
 <div class="qbox-label">
   <span style="font-weight:800; font-size:15px;">Soundtrack (optional)</span>
@@ -355,6 +365,10 @@ https://example.com/dance.gif"></textarea>
     <div class="eyebrow">You're in</div>
     <h1><span id="waiting-name">Player</span></h1>
     <div style="color:#8B93A7; font-size:15px;" id="waiting-sub">Waiting for the host to start...</div>
+    <div class="waiting-lobby-wrap" id="waiting-gif-wrap" style="display:none;">
+      <div class="qbox-label"><span style="font-weight:800; font-size:14px;">Pick your GIF</span></div>
+      <div id="waiting-gif-list" class="gif-pick-grid"></div>
+    </div>
     <div class="waiting-lobby-wrap" id="waiting-lobby-wrap" style="display:none;">
       <div class="qbox-label"><span style="font-weight:800; font-size:14px;">Players</span><span class="count-pill" id="waiting-lobby-count">0 joined</span></div>
       <div class="lobby-list" id="waiting-lobby-list"></div>
@@ -377,7 +391,6 @@ https://example.com/dance.gif"></textarea>
     </div>
     <div id="locked-msg">Answer locked in - waiting for reveal...</div>
     <div id="paused-indicator" style="display:none; text-align:center; color:#FFC531; font-weight:800; margin-top:14px;">Game paused</div>
-    <button class="btn-primary" id="btn-play-gif" style="display:none; margin-top:14px;">Play a GIF!</button>
 
 <div id="host-strip">
   <button class="btn-ghost" id="btn-pause-game">Pause</button>
@@ -452,6 +465,20 @@ https://example.com/dance.gif"></textarea>
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-music-settings-cancel">Cancel</button>
       <button class="btn-primary" id="btn-music-settings-save">Save &amp; Play</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== HOST GIF PICK MODAL ===================== -->
+
+<div class="modal-overlay" id="host-gif-pick-modal">
+  <div class="modal-card" style="max-width:400px; text-align:left;">
+    <div class="modal-title" style="text-align:center;">Pick Your GIF</div>
+    <div class="modal-body" style="text-align:center;">Whoever answers a question correctly first each round gets their pick shown here. Choose from what's left, or skip.</div>
+    <div id="host-gif-pick-modal-list" class="gif-pick-grid" style="margin-bottom:16px;"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-host-gif-skip">Skip</button>
+      <button class="btn-primary" id="btn-host-gif-confirm">Confirm</button>
     </div>
   </div>
 </div>
@@ -632,15 +659,10 @@ https://example.com/dance.gif"></textarea>
   var INACTIVITY_MISS_THRESHOLD = 3;
   var INACTIVITY_RESPONSE_MS = 10000;
 
-  /* ---------- GIF rewards ---------- */
+  /* ---------- GIF rewards: everyone picks their own gif before the game starts;
+     whoever answers correctly fastest each round gets theirs shown ---------- */
   var gifLinks = [];
-  var gifWindowOpen = false;
-  var gifPlayedThisRound = false;
-  var gifWindowTimer = null;
-  var hostCorrectStreak = 0;
-  var hostGifEligible = false;
-  var GIF_STREAK_THRESHOLD = 2;
-  var GIF_WINDOW_MS = 5000;
+  var hostChosenGif = null;
   var GIF_DISPLAY_MS = 4000;
 
   /* ---------- soundtrack + pause ---------- */
@@ -702,8 +724,8 @@ https://example.com/dance.gif"></textarea>
     if (data.type === "join_request") {
       if (data.passcode !== passcode) { conn.send({ type: "join_denied" }); return; }
       var name = (data.name || "Player").substring(0, 16);
-      connections[conn.peer] = { conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null, correctStreak: 0 };
-      conn.send({ type: "join_accepted" });
+      connections[conn.peer] = { conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null, chosenGif: null };
+      conn.send({ type: "join_accepted", gifLinks: gifLinks, takenGifs: getTakenGifs(conn.peer), yourPick: null });
       renderLobby();
       if (phase === "question" || phase === "scoreboard") {
         conn.send({ type: "wait_next_round" });
@@ -721,8 +743,16 @@ https://example.com/dance.gif"></textarea>
       return;
     }
 
-    if (data.type === "gif_trigger") {
-      tryPlayGif();
+    if (data.type === "pick_gif") {
+      var picker = connections[conn.peer];
+      if (!picker || gifLinks.indexOf(data.url) === -1) return;
+      if (getTakenGifs(conn.peer).indexOf(data.url) !== -1) {
+        // someone else already claimed it - just resend this player their current state
+        try { conn.send({ type: "gif_links_update", gifLinks: gifLinks, takenGifs: getTakenGifs(conn.peer), yourPick: picker.chosenGif }); } catch (e) {}
+        return;
+      }
+      picker.chosenGif = data.url;
+      syncGifPickersToPlayers();
       return;
     }
 
@@ -931,9 +961,47 @@ https://example.com/dance.gif"></textarea>
   $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
   $("music-count").textContent = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; }).length + " added";
 
+  /* ---------- GIF picking: no two participants may hold the same GIF ---------- */
+  // links picked by anyone currently connected, except pid (pass null to include everyone)
+  function getTakenGifs(excludePid) {
+    var taken = [];
+    var keys = Object.keys(connections);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] === excludePid) continue;
+      if (connections[keys[i]].chosenGif) taken.push(connections[keys[i]].chosenGif);
+    }
+    return taken;
+  }
+  function buildGifPickHtml(links, selectedUrl, takenGifs) {
+    var html = "";
+    for (var i = 0; i < links.length; i++) {
+      var isTaken = takenGifs && takenGifs.indexOf(links[i]) !== -1;
+      var cls = "gif-pick-item" + (links[i] === selectedUrl ? " selected" : "") + (isTaken ? " taken" : "");
+      html += '<div class="' + cls + '" data-url="' + escapeHtml(links[i]) + '"><img src="' + escapeHtml(links[i]) + '" alt=""></div>';
+    }
+    return html;
+  }
+  // tell every connected player which links are still available, keyed to what THEY specifically can pick
+  function syncGifPickersToPlayers() {
+    var keys = Object.keys(connections);
+    for (var i = 0; i < keys.length; i++) {
+      var pid = keys[i];
+      var c = connections[pid];
+      try {
+        c.conn.send({ type: "gif_links_update", gifLinks: gifLinks, takenGifs: getTakenGifs(pid), yourPick: c.chosenGif });
+      } catch (e) {}
+    }
+  }
+  function updateGifLinksLive() {
+    gifLinks = parseLinkList($("gif-input").value);
+    if (phase === "lobby") syncGifPickersToPlayers();
+  }
+  updateGifLinksLive();
+
   $("gif-input").addEventListener("input", function () {
     $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
     saveField(GIFS_STORAGE_KEY, $("gif-input"));
+    updateGifLinksLive();
   });
   $("music-input").addEventListener("input", function () {
     var ids = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
@@ -963,19 +1031,13 @@ https://example.com/dance.gif"></textarea>
     hostScore = 0;
     hostMissedStreak = 0;
     hostOptedOut = false;
-    hostCorrectStreak = 0;
-    hostGifEligible = false;
-    gameEndsAt = Date.now() + gameDurationMs;
     gamePaused = false;
 
     var startKeys = Object.keys(connections);
     for (var s = 0; s < startKeys.length; s++) {
       connections[startKeys[s]].missedStreak = 0;
-      connections[startKeys[s]].correctStreak = 0;
-      connections[startKeys[s]].gifEligible = false;
     }
 
-    gifLinks = parseLinkList($("gif-input").value);
     musicVideoIds = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
     musicIndex = 0;
     startMusic();
@@ -985,7 +1047,40 @@ https://example.com/dance.gif"></textarea>
     $("host-strip-info").style.display = "flex";
     $("btn-return-menu").className = "active";
 
+    if (gifLinks.length > 0) {
+      openHostGifPickModal();
+    } else {
+      beginFirstQuestion();
+    }
+  });
+  function beginFirstQuestion() {
+    gameEndsAt = Date.now() + gameDurationMs;
     nextQuestion();
+  }
+
+  /* ---------- host picks their own GIF from what's left, right after Start Game ---------- */
+  function openHostGifPickModal() {
+    hostChosenGif = null;
+    renderHostGifPickModal();
+    $("host-gif-pick-modal").className = "modal-overlay active";
+  }
+  function renderHostGifPickModal() {
+    $("host-gif-pick-modal-list").innerHTML = buildGifPickHtml(gifLinks, hostChosenGif, getTakenGifs(null));
+  }
+  $("host-gif-pick-modal-list").addEventListener("click", function (e) {
+    var item = e.target.closest(".gif-pick-item");
+    if (!item || item.className.indexOf("taken") !== -1) return;
+    hostChosenGif = item.getAttribute("data-url");
+    renderHostGifPickModal();
+  });
+  $("btn-host-gif-skip").addEventListener("click", function () {
+    hostChosenGif = null;
+    $("host-gif-pick-modal").className = "modal-overlay";
+    beginFirstQuestion();
+  });
+  $("btn-host-gif-confirm").addEventListener("click", function () {
+    $("host-gif-pick-modal").className = "modal-overlay";
+    beginFirstQuestion();
   });
 
   /* ---------- abandon the live game and go back to the landing screen ---------- */
@@ -993,7 +1088,6 @@ https://example.com/dance.gif"></textarea>
     if (!confirm("End this game and return to the menu? This disconnects all players.")) return;
 
     clearInterval(timerHandle);
-    clearTimeout(gifWindowTimer);
     clearTimeout(hostInactivityTimer);
     var ck = Object.keys(connections);
     for (var i = 0; i < ck.length; i++) {
@@ -1038,10 +1132,6 @@ https://example.com/dance.gif"></textarea>
     hostAnswerLocked = false;
     phase = "question";
 
-    clearTimeout(gifWindowTimer);
-    gifWindowOpen = false;
-    gifPlayedThisRound = false;
-    $("btn-play-gif").style.display = "none";
     gamePaused = false;
     $("btn-pause-game").textContent = "Pause";
     $("paused-indicator").style.display = "none";
@@ -1239,10 +1329,8 @@ https://example.com/dance.gif"></textarea>
       } else if (connections[pid]) {
         connections[pid].score += points;
       }
-      roundResults.push({ id: pid, correct: isCorrect, choice: a.choice, points: points });
+      roundResults.push({ id: pid, correct: isCorrect, choice: a.choice, points: points, timeMs: a.timeMs });
     }
-
-    updateGifStreaksAndEligibility(roundResults);
 
     // tell each connected player their result (including non-answerers)
     var allIds = Object.keys(connections);
@@ -1252,9 +1340,9 @@ https://example.com/dance.gif"></textarea>
       for (var z = 0; z < roundResults.length; z++) { if (roundResults[z].id === pk) r = roundResults[z]; }
       var payload;
       if (r) {
-        payload = { type: "reveal", correctIndex: q.correct, yourChoice: r.choice, correct: r.correct, pointsEarned: r.points, totalScore: connections[pk].score, gifEligible: connections[pk].gifEligible };
+        payload = { type: "reveal", correctIndex: q.correct, yourChoice: r.choice, correct: r.correct, pointsEarned: r.points, totalScore: connections[pk].score };
       } else {
-        payload = { type: "reveal", correctIndex: q.correct, yourChoice: -1, correct: false, pointsEarned: 0, totalScore: connections[pk].score, gifEligible: connections[pk].gifEligible };
+        payload = { type: "reveal", correctIndex: q.correct, yourChoice: -1, correct: false, pointsEarned: 0, totalScore: connections[pk].score };
       }
       try { connections[pk].conn.send(payload); } catch (e) {}
     }
@@ -1266,53 +1354,28 @@ https://example.com/dance.gif"></textarea>
       if (idx === q.correct) tiles[t].className += " was-correct";
     }
 
-    $("btn-play-gif").style.display = (hostGifEligible && mode === "host") ? "block" : "none";
+    var gifWinnerUrl = findGifWinner(roundResults);
 
     setTimeout(function () {
-      if (!anyoneGifEligibleThisRound) { goToScoreboard(); return; }
-      openGifWindow();
+      if (!gifWinnerUrl) { goToScoreboard(); return; }
+      showGifOnHostScreen(gifWinnerUrl);
     }, 1200);
   }
 
-  /* ---------- GIF rewards: answer 2+ correct in a row -> earn a chance to trigger a random GIF ---------- */
-  var anyoneGifEligibleThisRound = false;
-  function updateGifStreaksAndEligibility(roundResults) {
-    anyoneGifEligibleThisRound = false;
-    var keys = Object.keys(connections);
-    for (var i = 0; i < keys.length; i++) {
-      var pid = keys[i];
-      var c = connections[pid];
-      var r = null;
-      for (var z = 0; z < roundResults.length; z++) { if (roundResults[z].id === pid) r = roundResults[z]; }
-      c.correctStreak = (r && r.correct) ? c.correctStreak + 1 : 0;
-      c.gifEligible = c.correctStreak >= GIF_STREAK_THRESHOLD && gifLinks.length > 0;
-      if (c.gifEligible) anyoneGifEligibleThisRound = true;
+  /* ---------- GIF rewards: whoever answers correctly fastest each round gets their
+     pre-picked GIF shown (host screen only) before the scoreboard ---------- */
+  function findGifWinner(roundResults) {
+    if (gifLinks.length === 0) return null;
+    var best = null;
+    for (var i = 0; i < roundResults.length; i++) {
+      var r = roundResults[i];
+      if (!r.correct) continue;
+      if (!best || r.timeMs < best.timeMs) best = r;
     }
-    var hostResult = null;
-    for (var y = 0; y < roundResults.length; y++) { if (roundResults[y].id === "__HOST__") hostResult = roundResults[y]; }
-    hostCorrectStreak = (hostResult && hostResult.correct) ? hostCorrectStreak + 1 : 0;
-    hostGifEligible = hostCorrectStreak >= GIF_STREAK_THRESHOLD && gifLinks.length > 0;
-    if (hostGifEligible) anyoneGifEligibleThisRound = true;
+    if (!best) return null;
+    return best.id === "__HOST__" ? hostChosenGif : (connections[best.id] && connections[best.id].chosenGif) || null;
   }
-  function openGifWindow() {
-    gifWindowOpen = true;
-    gifWindowTimer = setTimeout(function () {
-      gifWindowOpen = false;
-      hideGifButtons();
-      if (!gifPlayedThisRound) goToScoreboard();
-    }, GIF_WINDOW_MS);
-  }
-  function hideGifButtons() {
-    $("btn-play-gif").style.display = "none";
-    broadcast({ type: "gif_used" });
-  }
-  function tryPlayGif() {
-    if (!gifWindowOpen || gifPlayedThisRound || gifLinks.length === 0) return;
-    gifPlayedThisRound = true;
-    gifWindowOpen = false;
-    clearTimeout(gifWindowTimer);
-    hideGifButtons();
-    var url = gifLinks[Math.floor(Math.random() * gifLinks.length)];
+  function showGifOnHostScreen(url) {
     $("gif-overlay-img").src = url;
     $("gif-overlay").className = "modal-overlay active";
     setTimeout(function () {
@@ -1320,14 +1383,6 @@ https://example.com/dance.gif"></textarea>
       goToScoreboard();
     }, GIF_DISPLAY_MS);
   }
-  $("btn-play-gif").addEventListener("click", function () {
-    $("btn-play-gif").style.display = "none";
-    if (mode === "host") {
-      tryPlayGif();
-    } else if (mode === "player" && playerConn) {
-      playerConn.send({ type: "gif_trigger" });
-    }
-  });
 
   function goToScoreboard() {
     phase = "scoreboard";
@@ -1613,13 +1668,19 @@ https://example.com/dance.gif"></textarea>
       $("waiting-name").textContent = $("name-input").value.trim() || "Player";
       $("waiting-sub").textContent = "Waiting for the host to start...";
       $("waiting-lobby-wrap").style.display = "block";
+      renderWaitingGifPicker(data.gifLinks || [], data.takenGifs || [], data.yourPick);
       show("screen-waiting");
       return;
     }
     if (data.type === "wait_next_round") {
       $("waiting-sub").textContent = "Game is in progress - you'll join the next round.";
       $("waiting-lobby-wrap").style.display = "none";
+      $("waiting-gif-wrap").style.display = "none"; // the game already started - too late to pick
       show("screen-waiting");
+      return;
+    }
+    if (data.type === "gif_links_update") {
+      renderWaitingGifPicker(data.gifLinks || [], data.takenGifs || [], data.yourPick);
       return;
     }
     if (data.type === "question") { startPlayerQuestion(data); return; }
@@ -1632,10 +1693,25 @@ https://example.com/dance.gif"></textarea>
     }
     if (data.type === "dropped") { showPlayerDropped(data.reason); return; }
     if (data.type === "host_ended") { showPlayerDropped("host_ended"); return; }
-    if (data.type === "gif_used") { $("btn-play-gif").style.display = "none"; return; }
     if (data.type === "game_paused") { pauseAsPlayer(); return; }
     if (data.type === "game_resumed") { resumeAsPlayer(data.remainingSeconds); return; }
   }
+
+  function renderWaitingGifPicker(links, takenGifs, yourPick) {
+    $("waiting-gif-wrap").style.display = links.length > 0 ? "block" : "none";
+    var html = "";
+    for (var i = 0; i < links.length; i++) {
+      var isTaken = takenGifs.indexOf(links[i]) !== -1;
+      var cls = "gif-pick-item" + (links[i] === yourPick ? " selected" : "") + (isTaken ? " taken" : "");
+      html += '<div class="' + cls + '" data-url="' + escapeHtml(links[i]) + '"><img src="' + escapeHtml(links[i]) + '" alt=""></div>';
+    }
+    $("waiting-gif-list").innerHTML = html;
+  }
+  $("waiting-gif-list").addEventListener("click", function (e) {
+    var item = e.target.closest(".gif-pick-item");
+    if (!item || item.className.indexOf("taken") !== -1) return;
+    if (playerConn) playerConn.send({ type: "pick_gif", url: item.getAttribute("data-url") });
+  });
 
   function startPlayerQuestion(data) {
     hasAnsweredThisRound = false;
@@ -1644,7 +1720,6 @@ https://example.com/dance.gif"></textarea>
     $("q-progress").textContent = "QUESTION " + (data.index + 1);
     $("q-text").textContent = data.text;
     $("locked-msg").style.display = "none";
-    $("btn-play-gif").style.display = "none";
     $("host-strip").style.display = "none";
     $("host-strip-info").style.display = "none";
 
@@ -1719,7 +1794,6 @@ https://example.com/dance.gif"></textarea>
       var idx = parseInt(tiles[i].getAttribute("data-idx"), 10);
       if (idx === data.correctIndex) tiles[i].className += " was-correct";
     }
-    $("btn-play-gif").style.display = data.gifEligible ? "block" : "none";
   }
 
   function showPlayerScoreboard(rows, yourRank, yourRow) {
