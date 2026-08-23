@@ -235,6 +235,8 @@ border: 3px solid transparent; background: #1A1E29; flex-shrink: 0;
 .gif-pick-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gif-pick-item.selected { border-color: #3FD6B0; }
 .gif-pick-item.taken { opacity: 0.3; cursor: not-allowed; filter: grayscale(1); }
+.song-pick-item { width: 120px; height: auto; aspect-ratio: 16/9; }
+.song-pick-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1A1E29; font-size: 24px; }
 
 /* ============ PERSISTENT MUSIC BAR + RETURN TO MENU (host only, float above every screen) ============ */
 #music-bar {
@@ -369,6 +371,10 @@ https://example.com/dance.gif"></textarea>
       <div class="qbox-label"><span style="font-weight:800; font-size:14px;">Pick your GIF</span></div>
       <div id="waiting-gif-list" class="gif-pick-grid"></div>
     </div>
+    <div class="waiting-lobby-wrap" id="waiting-song-wrap" style="display:none;">
+      <div class="qbox-label"><span style="font-weight:800; font-size:14px;">Pick your steal song</span></div>
+      <div id="waiting-song-list" class="gif-pick-grid"></div>
+    </div>
     <div class="waiting-lobby-wrap" id="waiting-lobby-wrap" style="display:none;">
       <div class="qbox-label"><span style="font-weight:800; font-size:14px;">Players</span><span class="count-pill" id="waiting-lobby-count">0 joined</span></div>
       <div class="lobby-list" id="waiting-lobby-list"></div>
@@ -479,6 +485,20 @@ https://example.com/dance.gif"></textarea>
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-host-gif-skip">Skip</button>
       <button class="btn-primary" id="btn-host-gif-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== HOST SONG PICK MODAL ===================== -->
+
+<div class="modal-overlay" id="host-song-pick-modal">
+  <div class="modal-card" style="max-width:400px; text-align:left;">
+    <div class="modal-title" style="text-align:center;">Pick Your Steal Song</div>
+    <div class="modal-body" style="text-align:center;">Answer 3 in a row and this takes over the soundtrack. Choose from what's left, or skip.</div>
+    <div id="host-song-pick-modal-list" class="gif-pick-grid" style="margin-bottom:16px;"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-host-song-skip">Skip</button>
+      <button class="btn-primary" id="btn-host-song-confirm">Confirm</button>
     </div>
   </div>
 </div>
@@ -665,8 +685,15 @@ https://example.com/dance.gif"></textarea>
   var hostChosenGif = null;
   var GIF_DISPLAY_MS = 4000;
 
+  /* ---------- music-steal: everyone picks a song before the game starts too;
+     3 correct answers in a row (once per streak build) takes over the soundtrack ---------- */
+  var musicLinks = [];
+  var hostChosenSong = null;
+  var hostMusicStreak = 0;
+  var hostMusicStealUsed = false;
+  var MUSIC_STEAL_THRESHOLD = 3;
+
   /* ---------- soundtrack + pause ---------- */
-  var musicVideoIds = [];
   var musicIndex = 0;
   var ytPlayer = null;
   var ytApiReady = false;
@@ -724,8 +751,13 @@ https://example.com/dance.gif"></textarea>
     if (data.type === "join_request") {
       if (data.passcode !== passcode) { conn.send({ type: "join_denied" }); return; }
       var name = (data.name || "Player").substring(0, 16);
-      connections[conn.peer] = { conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null, chosenGif: null };
-      conn.send({ type: "join_accepted", gifLinks: gifLinks, takenGifs: getTakenGifs(conn.peer), yourPick: null });
+      connections[conn.peer] = {
+        conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null,
+        chosenGif: null, chosenSong: null, musicStreak: 0, musicStealUsed: false
+      };
+      var joinPayload = pickerStateFieldsFor(conn.peer);
+      joinPayload.type = "join_accepted";
+      conn.send(joinPayload);
       renderLobby();
       if (phase === "question" || phase === "scoreboard") {
         conn.send({ type: "wait_next_round" });
@@ -744,15 +776,27 @@ https://example.com/dance.gif"></textarea>
     }
 
     if (data.type === "pick_gif") {
-      var picker = connections[conn.peer];
-      if (!picker || gifLinks.indexOf(data.url) === -1) return;
+      var gifPicker = connections[conn.peer];
+      if (!gifPicker || gifLinks.indexOf(data.url) === -1) return;
       if (getTakenGifs(conn.peer).indexOf(data.url) !== -1) {
         // someone else already claimed it - just resend this player their current state
-        try { conn.send({ type: "gif_links_update", gifLinks: gifLinks, takenGifs: getTakenGifs(conn.peer), yourPick: picker.chosenGif }); } catch (e) {}
+        try { conn.send(withType(pickerStateFieldsFor(conn.peer), "picker_update")); } catch (e) {}
         return;
       }
-      picker.chosenGif = data.url;
-      syncGifPickersToPlayers();
+      gifPicker.chosenGif = data.url;
+      syncPickersToPlayers();
+      return;
+    }
+
+    if (data.type === "pick_song") {
+      var songPicker = connections[conn.peer];
+      if (!songPicker || musicLinks.indexOf(data.url) === -1) return;
+      if (getTakenSongs(conn.peer).indexOf(data.url) !== -1) {
+        try { conn.send(withType(pickerStateFieldsFor(conn.peer), "picker_update")); } catch (e) {}
+        return;
+      }
+      songPicker.chosenSong = data.url;
+      syncPickersToPlayers();
       return;
     }
 
@@ -961,17 +1005,21 @@ https://example.com/dance.gif"></textarea>
   $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
   $("music-count").textContent = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; }).length + " added";
 
-  /* ---------- GIF picking: no two participants may hold the same GIF ---------- */
-  // links picked by anyone currently connected, except pid (pass null to include everyone)
-  function getTakenGifs(excludePid) {
+  /* ---------- GIF + song picking: no two participants may hold the same GIF,
+     and separately no two may hold the same steal-song ---------- */
+  function withType(obj, type) { obj.type = type; return obj; }
+  // links picked by anyone currently connected (for the given field), except pid (pass null for everyone)
+  function getTakenFromField(field, excludePid) {
     var taken = [];
     var keys = Object.keys(connections);
     for (var i = 0; i < keys.length; i++) {
       if (keys[i] === excludePid) continue;
-      if (connections[keys[i]].chosenGif) taken.push(connections[keys[i]].chosenGif);
+      if (connections[keys[i]][field]) taken.push(connections[keys[i]][field]);
     }
     return taken;
   }
+  function getTakenGifs(excludePid) { return getTakenFromField("chosenGif", excludePid); }
+  function getTakenSongs(excludePid) { return getTakenFromField("chosenSong", excludePid); }
   function buildGifPickHtml(links, selectedUrl, takenGifs) {
     var html = "";
     for (var i = 0; i < links.length; i++) {
@@ -981,22 +1029,45 @@ https://example.com/dance.gif"></textarea>
     }
     return html;
   }
-  // tell every connected player which links are still available, keyed to what THEY specifically can pick
-  function syncGifPickersToPlayers() {
+  function buildSongPickHtml(links, selectedUrl, takenSongs) {
+    var html = "";
+    for (var i = 0; i < links.length; i++) {
+      var url = links[i];
+      var vid = extractYouTubeId(url);
+      var isTaken = takenSongs && takenSongs.indexOf(url) !== -1;
+      var cls = "gif-pick-item song-pick-item" + (url === selectedUrl ? " selected" : "") + (isTaken ? " taken" : "");
+      var inner = vid
+        ? '<img src="https://img.youtube.com/vi/' + vid + '/mqdefault.jpg" alt="">'
+        : '<div class="song-pick-fallback">🎵</div>';
+      html += '<div class="' + cls + '" data-url="' + escapeHtml(url) + '">' + inner + '</div>';
+    }
+    return html;
+  }
+  // what to tell one player about both pools - what's available, what's taken by others, and their own picks
+  function pickerStateFieldsFor(pid) {
+    var c = connections[pid];
+    return {
+      gifLinks: gifLinks, takenGifs: getTakenGifs(pid), yourGifPick: c ? c.chosenGif : null,
+      musicLinks: musicLinks, takenSongs: getTakenSongs(pid), yourSongPick: c ? c.chosenSong : null
+    };
+  }
+  function syncPickersToPlayers() {
     var keys = Object.keys(connections);
     for (var i = 0; i < keys.length; i++) {
       var pid = keys[i];
-      var c = connections[pid];
-      try {
-        c.conn.send({ type: "gif_links_update", gifLinks: gifLinks, takenGifs: getTakenGifs(pid), yourPick: c.chosenGif });
-      } catch (e) {}
+      try { connections[pid].conn.send(withType(pickerStateFieldsFor(pid), "picker_update")); } catch (e) {}
     }
   }
   function updateGifLinksLive() {
     gifLinks = parseLinkList($("gif-input").value);
-    if (phase === "lobby") syncGifPickersToPlayers();
+    if (phase === "lobby") syncPickersToPlayers();
+  }
+  function updateMusicLinksLive() {
+    musicLinks = parseLinkList($("music-input").value);
+    if (phase === "lobby") syncPickersToPlayers();
   }
   updateGifLinksLive();
+  updateMusicLinksLive();
 
   $("gif-input").addEventListener("input", function () {
     $("gif-count").textContent = parseLinkList($("gif-input").value).length + " added";
@@ -1007,6 +1078,7 @@ https://example.com/dance.gif"></textarea>
     var ids = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
     $("music-count").textContent = ids.length + " added";
     saveField(MUSIC_STORAGE_KEY, $("music-input"));
+    updateMusicLinksLive();
   });
   $("question-input").addEventListener("input", function () {
     refreshParsedCount();
@@ -1038,29 +1110,54 @@ https://example.com/dance.gif"></textarea>
       connections[startKeys[s]].missedStreak = 0;
     }
 
-    musicVideoIds = parseLinkList($("music-input").value).map(extractYouTubeId).filter(function (id) { return !!id; });
-    musicIndex = 0;
-    startMusic();
+    ensureYtPlayer(); // warm it up now so it's ready by the time picking is done
 
     // show host control strip during questions
     $("host-strip").style.display = "flex";
     $("host-strip-info").style.display = "flex";
     $("btn-return-menu").className = "active";
 
+    hostChosenGif = null;
+    hostChosenSong = null;
+    hostMusicStreak = 0;
+    hostMusicStealUsed = false;
+
     if (gifLinks.length > 0) {
       openHostGifPickModal();
+    } else if (musicLinks.length > 0) {
+      openHostSongPickModal();
     } else {
       beginFirstQuestion();
     }
   });
+  function afterHostGifStep() {
+    if (musicLinks.length > 0) {
+      openHostSongPickModal();
+    } else {
+      beginFirstQuestion();
+    }
+  }
   function beginFirstQuestion() {
     gameEndsAt = Date.now() + gameDurationMs;
+    if (musicLinks.length > 0) {
+      musicIndex = pickRandomStartingSongIndex();
+      startMusic();
+    }
     nextQuestion();
   }
+  // the game's opening song is randomly chosen from whatever nobody claimed as their steal-song
+  function pickRandomStartingSongIndex() {
+    if (musicLinks.length === 0) return 0;
+    var taken = getTakenSongs(null);
+    var unclaimed = musicLinks.filter(function (u) { return taken.indexOf(u) === -1 && u !== hostChosenSong; });
+    var pool = unclaimed.length > 0 ? unclaimed : musicLinks;
+    var chosen = pool[Math.floor(Math.random() * pool.length)];
+    var idx = musicLinks.indexOf(chosen);
+    return idx === -1 ? 0 : idx;
+  }
 
-  /* ---------- host picks their own GIF from what's left, right after Start Game ---------- */
+  /* ---------- host picks their own GIF and steal-song from what's left, right after Start Game ---------- */
   function openHostGifPickModal() {
-    hostChosenGif = null;
     renderHostGifPickModal();
     $("host-gif-pick-modal").className = "modal-overlay active";
   }
@@ -1076,10 +1173,33 @@ https://example.com/dance.gif"></textarea>
   $("btn-host-gif-skip").addEventListener("click", function () {
     hostChosenGif = null;
     $("host-gif-pick-modal").className = "modal-overlay";
-    beginFirstQuestion();
+    afterHostGifStep();
   });
   $("btn-host-gif-confirm").addEventListener("click", function () {
     $("host-gif-pick-modal").className = "modal-overlay";
+    afterHostGifStep();
+  });
+
+  function openHostSongPickModal() {
+    renderHostSongPickModal();
+    $("host-song-pick-modal").className = "modal-overlay active";
+  }
+  function renderHostSongPickModal() {
+    $("host-song-pick-modal-list").innerHTML = buildSongPickHtml(musicLinks, hostChosenSong, getTakenSongs(null));
+  }
+  $("host-song-pick-modal-list").addEventListener("click", function (e) {
+    var item = e.target.closest(".gif-pick-item");
+    if (!item || item.className.indexOf("taken") !== -1) return;
+    hostChosenSong = item.getAttribute("data-url");
+    renderHostSongPickModal();
+  });
+  $("btn-host-song-skip").addEventListener("click", function () {
+    hostChosenSong = null;
+    $("host-song-pick-modal").className = "modal-overlay";
+    beginFirstQuestion();
+  });
+  $("btn-host-song-confirm").addEventListener("click", function () {
+    $("host-song-pick-modal").className = "modal-overlay";
     beginFirstQuestion();
   });
 
@@ -1229,7 +1349,7 @@ https://example.com/dance.gif"></textarea>
       events: {
         onReady: function () {
           ytPlayerReady = true;
-          if (musicVideoIds.length > 0 && phase !== "lobby") playCurrentSong();
+          if (musicLinks.length > 0 && phase !== "lobby") playCurrentSong();
         },
         onStateChange: function (e) {
           if (e.data === YT.PlayerState.ENDED) {
@@ -1244,19 +1364,39 @@ https://example.com/dance.gif"></textarea>
     });
   }
   function startMusic() {
-    $("music-bar").className = musicVideoIds.length > 0 ? "active" : "";
-    if (musicVideoIds.length === 0) return;
+    $("music-bar").className = musicLinks.length > 0 ? "active" : "";
+    if (musicLinks.length === 0) return;
     ensureYtPlayer();
     playCurrentSong();
   }
+  // finds the next link (from startIndex onward, wrapping once) that actually yields a video ID
+  function findPlayableSongFrom(startIndex) {
+    for (var offset = 0; offset < musicLinks.length; offset++) {
+      var idx = (startIndex + offset) % musicLinks.length;
+      var id = extractYouTubeId(musicLinks[idx]);
+      if (id) return { id: id, index: idx };
+    }
+    return null;
+  }
   function playCurrentSong() {
-    if (!ytPlayerReady || musicVideoIds.length === 0) return;
-    try { ytPlayer.loadVideoById(musicVideoIds[musicIndex]); } catch (e) {}
+    if (!ytPlayerReady || musicLinks.length === 0) return;
+    var found = findPlayableSongFrom(musicIndex);
+    if (!found) return;
+    musicIndex = found.index;
+    try { ytPlayer.loadVideoById(found.id); } catch (e) {}
   }
   function skipSong() {
-    if (musicVideoIds.length === 0) return;
-    musicIndex = (musicIndex + 1) % musicVideoIds.length;
+    if (musicLinks.length === 0) return;
+    musicIndex = (musicIndex + 1) % musicLinks.length;
     playCurrentSong();
+  }
+  // takes over the soundtrack with a specific link (the music-steal reward), independent of the skip order
+  function stealMusicTo(url) {
+    var id = extractYouTubeId(url);
+    if (!id) return;
+    var idx = musicLinks.indexOf(url);
+    if (idx !== -1) musicIndex = idx;
+    if (ytPlayerReady && ytPlayer) { try { ytPlayer.loadVideoById(id); } catch (e) {} }
   }
   $("btn-skip-song-bar").addEventListener("click", skipSong);
 
@@ -1274,7 +1414,7 @@ https://example.com/dance.gif"></textarea>
     saveField(MUSIC_STORAGE_KEY, $("music-input"));
     $("music-count").textContent = parseLinkList(newText).map(extractYouTubeId).filter(function (id) { return !!id; }).length + " added";
 
-    musicVideoIds = parseLinkList(newText).map(extractYouTubeId).filter(function (id) { return !!id; });
+    musicLinks = parseLinkList(newText);
     musicIndex = 0;
     $("music-settings-modal").className = "modal-overlay";
     startMusic();
@@ -1355,6 +1495,8 @@ https://example.com/dance.gif"></textarea>
     }
 
     var gifWinnerUrl = findGifWinner(roundResults);
+    var musicStealUrl = updateMusicStreaksAndSteal(roundResults);
+    if (musicStealUrl) stealMusicTo(musicStealUrl);
 
     setTimeout(function () {
       if (!gifWinnerUrl) { goToScoreboard(); return; }
@@ -1382,6 +1524,46 @@ https://example.com/dance.gif"></textarea>
       $("gif-overlay").className = "modal-overlay";
       goToScoreboard();
     }, GIF_DISPLAY_MS);
+  }
+
+  /* ---------- music steal: 3 correct answers in a row takes over the soundtrack with
+     that participant's pre-picked song - a one-time trigger per streak build, and if
+     more than one person crosses 3 the same round, the fastest correct answer wins ---------- */
+  function updateMusicStreaksAndSteal(roundResults) {
+    if (musicLinks.length === 0) return null;
+    var crossed = [];
+    var keys = Object.keys(connections);
+    for (var i = 0; i < keys.length; i++) {
+      var pid = keys[i];
+      var c = connections[pid];
+      var r = null;
+      for (var z = 0; z < roundResults.length; z++) { if (roundResults[z].id === pid) r = roundResults[z]; }
+      if (r && r.correct) {
+        c.musicStreak++;
+        if (c.musicStreak >= MUSIC_STEAL_THRESHOLD && !c.musicStealUsed && c.chosenSong) {
+          c.musicStealUsed = true;
+          crossed.push({ timeMs: r.timeMs, url: c.chosenSong });
+        }
+      } else {
+        c.musicStreak = 0;
+        c.musicStealUsed = false;
+      }
+    }
+    var hostResult = null;
+    for (var y = 0; y < roundResults.length; y++) { if (roundResults[y].id === "__HOST__") hostResult = roundResults[y]; }
+    if (hostResult && hostResult.correct) {
+      hostMusicStreak++;
+      if (hostMusicStreak >= MUSIC_STEAL_THRESHOLD && !hostMusicStealUsed && hostChosenSong) {
+        hostMusicStealUsed = true;
+        crossed.push({ timeMs: hostResult.timeMs, url: hostChosenSong });
+      }
+    } else {
+      hostMusicStreak = 0;
+      hostMusicStealUsed = false;
+    }
+    if (crossed.length === 0) return null;
+    crossed.sort(function (a, b) { return a.timeMs - b.timeMs; });
+    return crossed[0].url;
   }
 
   function goToScoreboard() {
@@ -1668,7 +1850,7 @@ https://example.com/dance.gif"></textarea>
       $("waiting-name").textContent = $("name-input").value.trim() || "Player";
       $("waiting-sub").textContent = "Waiting for the host to start...";
       $("waiting-lobby-wrap").style.display = "block";
-      renderWaitingGifPicker(data.gifLinks || [], data.takenGifs || [], data.yourPick);
+      renderWaitingPickers(data);
       show("screen-waiting");
       return;
     }
@@ -1676,13 +1858,11 @@ https://example.com/dance.gif"></textarea>
       $("waiting-sub").textContent = "Game is in progress - you'll join the next round.";
       $("waiting-lobby-wrap").style.display = "none";
       $("waiting-gif-wrap").style.display = "none"; // the game already started - too late to pick
+      $("waiting-song-wrap").style.display = "none";
       show("screen-waiting");
       return;
     }
-    if (data.type === "gif_links_update") {
-      renderWaitingGifPicker(data.gifLinks || [], data.takenGifs || [], data.yourPick);
-      return;
-    }
+    if (data.type === "picker_update") { renderWaitingPickers(data); return; }
     if (data.type === "question") { startPlayerQuestion(data); return; }
     if (data.type === "reveal") { showPlayerReveal(data); return; }
     if (data.type === "scoreboard") { showPlayerScoreboard(data.rows, data.yourRank, data.yourRow); return; }
@@ -1697,20 +1877,22 @@ https://example.com/dance.gif"></textarea>
     if (data.type === "game_resumed") { resumeAsPlayer(data.remainingSeconds); return; }
   }
 
-  function renderWaitingGifPicker(links, takenGifs, yourPick) {
-    $("waiting-gif-wrap").style.display = links.length > 0 ? "block" : "none";
-    var html = "";
-    for (var i = 0; i < links.length; i++) {
-      var isTaken = takenGifs.indexOf(links[i]) !== -1;
-      var cls = "gif-pick-item" + (links[i] === yourPick ? " selected" : "") + (isTaken ? " taken" : "");
-      html += '<div class="' + cls + '" data-url="' + escapeHtml(links[i]) + '"><img src="' + escapeHtml(links[i]) + '" alt=""></div>';
-    }
-    $("waiting-gif-list").innerHTML = html;
+  function renderWaitingPickers(data) {
+    var gifLinks = data.gifLinks || [], musicLinks = data.musicLinks || [];
+    $("waiting-gif-wrap").style.display = gifLinks.length > 0 ? "block" : "none";
+    $("waiting-gif-list").innerHTML = buildGifPickHtml(gifLinks, data.yourGifPick, data.takenGifs || []);
+    $("waiting-song-wrap").style.display = musicLinks.length > 0 ? "block" : "none";
+    $("waiting-song-list").innerHTML = buildSongPickHtml(musicLinks, data.yourSongPick, data.takenSongs || []);
   }
   $("waiting-gif-list").addEventListener("click", function (e) {
     var item = e.target.closest(".gif-pick-item");
     if (!item || item.className.indexOf("taken") !== -1) return;
     if (playerConn) playerConn.send({ type: "pick_gif", url: item.getAttribute("data-url") });
+  });
+  $("waiting-song-list").addEventListener("click", function (e) {
+    var item = e.target.closest(".gif-pick-item");
+    if (!item || item.className.indexOf("taken") !== -1) return;
+    if (playerConn) playerConn.send({ type: "pick_song", url: item.getAttribute("data-url") });
   });
 
   function startPlayerQuestion(data) {
