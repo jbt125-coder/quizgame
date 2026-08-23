@@ -194,6 +194,28 @@ padding: 16px 16px; margin-bottom: 10px;
 #screen-over.player-mode { justify-content: center; align-items: center; text-align: center; }
 .over-score { font-size: 54px; font-weight: 800; color: #FFC531; margin: 6px 0 20px 0; }
 
+/* ============ DROPPED ============ */
+#screen-dropped { justify-content: center; align-items: center; text-align: center; }
+
+/* ============ YOUR RANK (scoreboard, when outside the shown top 6) ============ */
+.sb-your-rank-sep { text-align: center; color: #5B6478; font-weight: 700; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; margin: 14px 0 10px 0; }
+.board-row.your-rank-row { border-color: #3FD6B0; background: linear-gradient(90deg, rgba(63,214,176,0.12), #12151D); }
+
+/* ============ INACTIVITY MODAL ============ */
+.modal-overlay {
+display: none; position: fixed; inset: 0; background: rgba(11,14,20,0.75);
+align-items: center; justify-content: center; z-index: 1000; padding: 24px;
+}
+.modal-overlay.active { display: flex; }
+.modal-card {
+background: #12151D; border: 1px solid #2A2F3D; border-radius: 16px;
+padding: 24px; max-width: 340px; width: 100%; text-align: center;
+}
+.modal-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+.modal-body { color: #8B93A7; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+.modal-actions { display: flex; gap: 10px; }
+.modal-actions button { flex: 1; }
+
 ::-webkit-scrollbar { display: none; }
 </style>
 
@@ -341,6 +363,27 @@ Answer: B"></textarea>
     <div id="over-host-board"></div>
   </div>
 
+  <!-- ===================== DROPPED (inactivity) ===================== -->
+
+  <div class="screen" id="screen-dropped">
+    <div class="eyebrow center-text">Buzzer Room</div>
+    <h1 class="center-text">You've left the <span class="accent3">game</span></h1>
+    <div style="color:#8B93A7; font-size:14px; text-align:center;" id="dropped-reason">You were removed from the game.</div>
+  </div>
+
+</div>
+
+<!-- ===================== INACTIVITY MODAL ===================== -->
+
+<div class="modal-overlay" id="inactivity-modal">
+  <div class="modal-card">
+    <div class="modal-title">Still there?</div>
+    <div class="modal-body" id="inactivity-modal-body">You've missed the last 3 questions in a row.</div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-inactivity-leave">Leave Game</button>
+      <button class="btn-primary" id="btn-inactivity-stay">I'm Still Here</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -387,6 +430,31 @@ Answer: B"></textarea>
   var TIMER_SECONDS = 15;
   var SCOREBOARD_PAUSE_SECONDS = 5;
 
+  /* ---------- shared inactivity modal (used by both host and player mode) ---------- */
+  function showInactivityModal(msg) {
+    $("inactivity-modal-body").textContent = msg;
+    $("inactivity-modal").className = "modal-overlay active";
+  }
+  function hideInactivityModal() {
+    $("inactivity-modal").className = "modal-overlay";
+  }
+  $("btn-inactivity-stay").addEventListener("click", function () {
+    hideInactivityModal();
+    if (mode === "player" && playerConn) {
+      playerConn.send({ type: "inactivity_response", stay: true });
+    } else if (mode === "host") {
+      hostRespondInactivity(true);
+    }
+  });
+  $("btn-inactivity-leave").addEventListener("click", function () {
+    hideInactivityModal();
+    if (mode === "player" && playerConn) {
+      playerConn.send({ type: "inactivity_response", stay: false });
+    } else if (mode === "host") {
+      hostRespondInactivity(false);
+    }
+  });
+
   /* =========================================================
      LANDING
   ========================================================= */
@@ -431,6 +499,12 @@ Answer: B"></textarea>
   var hostPickTime = 0;
   var hostAnswerLocked = false;
   var hostScore = 0;
+  var hostMissedStreak = 0;
+  var hostOptedOut = false;
+  var hostInactivityPending = false;
+  var hostInactivityTimer = null;
+  var INACTIVITY_MISS_THRESHOLD = 3;
+  var INACTIVITY_RESPONSE_MS = 10000;
 
   document.getElementById("dur-5").addEventListener("click", function () { selectDuration(5); });
   document.getElementById("dur-10").addEventListener("click", function () { selectDuration(10); });
@@ -483,7 +557,7 @@ Answer: B"></textarea>
     if (data.type === "join_request") {
       if (data.passcode !== passcode) { conn.send({ type: "join_denied" }); return; }
       var name = (data.name || "Player").substring(0, 16);
-      connections[conn.peer] = { conn: conn, name: name, score: 0 };
+      connections[conn.peer] = { conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null };
       conn.send({ type: "join_accepted" });
       renderLobby();
       if (phase === "question" || phase === "scoreboard") {
@@ -501,6 +575,20 @@ Answer: B"></textarea>
       checkAllPlayersAnswered();
       return;
     }
+
+    if (data.type === "inactivity_response") {
+      var respondingPid = conn.peer;
+      var pc = connections[respondingPid];
+      if (!pc || !pc.inactivityPending) return;
+      if (pc.inactivityTimer) clearTimeout(pc.inactivityTimer);
+      pc.inactivityPending = false;
+      if (data.stay) {
+        pc.missedStreak = 0;
+      } else {
+        dropPlayer(respondingPid, "left");
+      }
+      return;
+    }
   }
   function checkAllPlayersAnswered() {
     var keys = Object.keys(connections);
@@ -510,10 +598,77 @@ Answer: B"></textarea>
     }
     // all players are in, but if the host is playing this round too, wait for
     // their pick as well - don't cut off their chance to answer and score.
-    if (hostPick === null) return;
+    if (!hostOptedOut && hostPick === null) return;
     revealNow();
   }
+
+  /* ---------- inactivity handling (miss 3 in a row -> prompt -> auto-drop) ---------- */
+  function updateInactivityStreaks() {
+    var keys = Object.keys(connections);
+    for (var i = 0; i < keys.length; i++) {
+      var pid = keys[i];
+      var c = connections[pid];
+      if (answersThisRound[pid]) {
+        c.missedStreak = 0;
+      } else {
+        c.missedStreak++;
+        if (c.missedStreak >= INACTIVITY_MISS_THRESHOLD && !c.inactivityPending) {
+          promptPlayerInactivity(pid);
+        }
+      }
+    }
+    if (!hostOptedOut) {
+      if (hostPick !== null) {
+        hostMissedStreak = 0;
+      } else {
+        hostMissedStreak++;
+        if (hostMissedStreak >= INACTIVITY_MISS_THRESHOLD && !hostInactivityPending) {
+          promptHostInactivity();
+        }
+      }
+    }
+  }
+  function promptPlayerInactivity(pid) {
+    var c = connections[pid];
+    if (!c) return;
+    c.inactivityPending = true;
+    try { c.conn.send({ type: "inactivity_check" }); } catch (e) {}
+    c.inactivityTimer = setTimeout(function () {
+      dropPlayer(pid, "inactive");
+    }, INACTIVITY_RESPONSE_MS);
+  }
+  function promptHostInactivity() {
+    hostInactivityPending = true;
+    showInactivityModal("You've missed the last " + INACTIVITY_MISS_THRESHOLD + " questions in a row. Keep playing?");
+    hostInactivityTimer = setTimeout(function () {
+      hideInactivityModal();
+      hostRespondInactivity(false);
+    }, INACTIVITY_RESPONSE_MS);
+  }
+  function hostRespondInactivity(stay) {
+    if (hostInactivityTimer) { clearTimeout(hostInactivityTimer); hostInactivityTimer = null; }
+    hostInactivityPending = false;
+    if (stay) {
+      hostMissedStreak = 0;
+    } else {
+      hostOptedOut = true;
+      checkAllPlayersAnswered(); // the timer no longer needs to wait on the host
+    }
+  }
+  function dropPlayer(pid, reason) {
+    var c = connections[pid];
+    if (!c) return;
+    if (c.inactivityTimer) clearTimeout(c.inactivityTimer);
+    try { c.conn.send({ type: "dropped", reason: reason }); } catch (e) {}
+    delete connections[pid];
+    delete answersThisRound[pid];
+    renderLobby();
+    updateHostAnsweredCount();
+    checkAllPlayersAnswered(); // dropping them might complete the "everyone answered" set
+  }
   function handlePlayerLeave(conn) {
+    var c = connections[conn.peer];
+    if (c && c.inactivityTimer) clearTimeout(c.inactivityTimer);
     delete connections[conn.peer];
     renderLobby();
   }
@@ -621,7 +776,12 @@ Answer: B"></textarea>
     questions = shuffle(parsed);
     currentQ = -1;
     hostScore = 0;
+    hostMissedStreak = 0;
+    hostOptedOut = false;
     gameEndsAt = Date.now() + gameDurationMs;
+
+    var startKeys = Object.keys(connections);
+    for (var s = 0; s < startKeys.length; s++) { connections[startKeys[s]].missedStreak = 0; }
 
     // show host control strip during questions
     $("host-strip").style.display = "flex";
@@ -677,6 +837,7 @@ Answer: B"></textarea>
     if (hostAnswerLocked) return;
     hostPick = idx;
     hostPickTime = Date.now();
+    hostOptedOut = false; // answering means they're back in, even if they'd opted out earlier
     // the host's screen is the shared/projected display, so unlike players (who answer
     // on their own private phones) the tile is never highlighted - that would show the
     // whole room which answer the host picked before the reveal.
@@ -728,6 +889,8 @@ Answer: B"></textarea>
     if (hostPick !== null) {
       answersThisRound["__HOST__"] = { choice: hostPick, timeMs: hostPickTime - questionStartTime };
     }
+
+    updateInactivityStreaks();
 
     var pids = Object.keys(answersThisRound);
     var roundResults = [];
@@ -784,12 +947,17 @@ Answer: B"></textarea>
     var isLastRound = timeUp || !moreQuestions;
 
     renderScoreboard(isLastRound ? "Final Standings" : "Standings");
-    broadcast({
-      type: "scoreboard",
-      isLast: isLastRound,
-      seconds: SCOREBOARD_PAUSE_SECONDS,
-      rows: buildStandingsRows("Host")
-    });
+
+    var standingsRows = buildStandingsRows("Host");
+    var sbKeys = Object.keys(connections);
+    for (var si = 0; si < sbKeys.length; si++) {
+      var sPid = sbKeys[si];
+      var payload = buildScoreboardPayloadFor(standingsRows, sPid);
+      payload.type = "scoreboard";
+      payload.isLast = isLastRound;
+      payload.seconds = SCOREBOARD_PAUSE_SECONDS;
+      try { connections[sPid].conn.send(payload); } catch (e) {}
+    }
     show("screen-scoreboard");
 
     if (isLastRound) {
@@ -814,13 +982,15 @@ Answer: B"></textarea>
     }, 1000);
   }
 
+  var LEADERBOARD_SHOWN = 6;
+
   function buildStandingsRows(hostLabel) {
     var rows = [];
     var keys = Object.keys(connections);
     for (var i = 0; i < keys.length; i++) {
-      rows.push({ name: connections[keys[i]].name, score: connections[keys[i]].score, isHost: false });
+      rows.push({ pid: keys[i], name: connections[keys[i]].name, score: connections[keys[i]].score, isHost: false });
     }
-    rows.push({ name: hostLabel, score: hostScore, isHost: true });
+    rows.push({ pid: "__HOST__", name: hostLabel, score: hostScore, isHost: true });
     rows.sort(function (a, b) { return b.score - a.score; });
     return rows;
   }
@@ -838,9 +1008,37 @@ Answer: B"></textarea>
     return html;
   }
 
+  // caps the shown leaderboard at the top N, and if the given viewer isn't in
+  // that slice, adds their own rank/score alongside it separately.
+  function buildScoreboardPayloadFor(rows, viewerPid) {
+    var top = rows.slice(0, LEADERBOARD_SHOWN);
+    var payload = { rows: top };
+    for (var i = LEADERBOARD_SHOWN; i < rows.length; i++) {
+      if (rows[i].pid === viewerPid) {
+        payload.yourRank = i + 1;
+        payload.yourRow = rows[i];
+        break;
+      }
+    }
+    return payload;
+  }
+
+  function buildOwnRankHtml(rank, row) {
+    return '<div class="sb-your-rank-sep">Your rank</div>' +
+      '<div class="board-row your-rank-row">' +
+      '<div class="board-rank">' + rank + '</div>' +
+      '<div class="board-name">' + escapeHtml(row.name) + '</div>' +
+      '<div class="board-score">' + row.score + '</div>' +
+      '</div>';
+  }
+
   function renderScoreboard(heading) {
     $("sb-heading").textContent = heading;
-    $("sb-list").innerHTML = buildStandingsHtml(buildStandingsRows("You (Host)"));
+    var rows = buildStandingsRows("You (Host)");
+    var mine = buildScoreboardPayloadFor(rows, "__HOST__");
+    var html = buildStandingsHtml(mine.rows);
+    if (mine.yourRow) html += buildOwnRankHtml(mine.yourRank, mine.yourRow);
+    $("sb-list").innerHTML = html;
   }
 
   function finishGame() {
@@ -938,8 +1136,13 @@ Answer: B"></textarea>
     }
     if (data.type === "question") { startPlayerQuestion(data); return; }
     if (data.type === "reveal") { showPlayerReveal(data); return; }
-    if (data.type === "scoreboard") { showPlayerScoreboard(data.rows); return; }
+    if (data.type === "scoreboard") { showPlayerScoreboard(data.rows, data.yourRank, data.yourRow); return; }
     if (data.type === "game_over") { showPlayerGameOver(); return; }
+    if (data.type === "inactivity_check") {
+      showInactivityModal("You've missed the last " + INACTIVITY_MISS_THRESHOLD + " questions in a row. Still there?");
+      return;
+    }
+    if (data.type === "dropped") { showPlayerDropped(data.reason); return; }
   }
 
   function startPlayerQuestion(data) {
@@ -1015,10 +1218,20 @@ Answer: B"></textarea>
     }
   }
 
-  function showPlayerScoreboard(rows) {
+  function showPlayerScoreboard(rows, yourRank, yourRow) {
     $("sb-heading").textContent = "Standings";
-    $("sb-list").innerHTML = buildStandingsHtml(rows || []);
+    var html = buildStandingsHtml(rows || []);
+    if (yourRow) html += buildOwnRankHtml(yourRank, yourRow);
+    $("sb-list").innerHTML = html;
     show("screen-scoreboard");
+  }
+
+  function showPlayerDropped(reason) {
+    clearInterval(playerTimerHandle);
+    $("dropped-reason").textContent = reason === "left"
+      ? "You chose to leave the game."
+      : "You were removed for missing too many questions in a row.";
+    show("screen-dropped");
   }
 
   function showPlayerGameOver() {
