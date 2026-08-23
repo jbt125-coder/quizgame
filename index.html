@@ -135,8 +135,20 @@ background: #1A1E29; border: 2px solid #FFC531; color: #FFC531;
 font-size: 22px; font-weight: 800; padding: 8px 16px; border-radius: 999px; min-width: 50px; text-align: center;
 }
 .timer-badge.urgent { border-color: #FF5C7A; color: #FF5C7A; }
+#q-flip-wrap { position: relative; transition: transform 0.3s; }
+#q-flip-wrap.spell-flip { transform: rotate(180deg); }
 .qtext-main { font-size: 22px; font-weight: 800; line-height: 1.3; margin-bottom: 18px; flex-shrink: 0; }
+.answers-grid-wrap { position: relative; }
 .answers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.spell-overlay {
+display: none; position: absolute; inset: 0; border-radius: 16px;
+align-items: center; justify-content: center; font-weight: 800; font-size: 20px;
+text-align: center; z-index: 50;
+}
+.spell-overlay.active { display: flex; }
+#spell-freeze-overlay { background: rgba(46,134,171,0.94); color: #fff; }
+#spell-emoji-overlay { background: #0B0E14; font-size: 72px; border-radius: 0; }
+.spell-overlay-full { top: -8px; bottom: 0; }
 .ans-tile {
 border-radius: 16px; padding: 18px 14px; min-height: 92px;
 display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
@@ -240,6 +252,14 @@ border: 3px solid transparent; background: #1A1E29; flex-shrink: 0;
 .gif-pick-item.taken { opacity: 0.3; cursor: not-allowed; filter: grayscale(1); }
 .song-pick-item { width: 120px; height: auto; aspect-ratio: 16/9; }
 .song-pick-fallback { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #1A1E29; font-size: 24px; }
+
+/* ============ SPELL TARGET LIST ============ */
+.spell-target-row {
+background: #1A1E29; border: 2px solid #2A2F3D; border-radius: 10px;
+padding: 10px 12px; margin-bottom: 8px; cursor: pointer; font-size: 14px; font-weight: 700;
+}
+.spell-target-row.selected { border-color: #3FD6B0; color: #3FD6B0; }
+#spell-target-list { max-height: 200px; overflow-y: auto; padding-right: 4px; }
 
 /* ============ PERSISTENT MUSIC BAR + RETURN TO MENU (host only, float above every screen) ============ */
 #music-bar {
@@ -391,12 +411,20 @@ https://example.com/dance.gif"></textarea>
       <div class="eyebrow" id="q-progress" style="margin:0;">QUESTION 1</div>
       <div class="timer-badge" id="timer-badge">15</div>
     </div>
-    <div class="qtext-main" id="q-text">Question text</div>
-    <div class="answers-grid" id="answers-grid">
-      <div class="ans-tile tile-0" data-idx="0"><div class="letter">A</div><div class="atext">Choice A</div></div>
-      <div class="ans-tile tile-1" data-idx="1"><div class="letter">B</div><div class="atext">Choice B</div></div>
-      <div class="ans-tile tile-2" data-idx="2"><div class="letter">C</div><div class="atext">Choice C</div></div>
-      <div class="ans-tile tile-3" data-idx="3"><div class="letter">D</div><div class="atext">Choice D</div></div>
+    <div id="q-flip-wrap">
+      <div class="qtext-main" id="q-text">Question text</div>
+      <div class="answers-grid-wrap" id="answers-grid-wrap">
+        <div class="answers-grid" id="answers-grid">
+          <div class="ans-tile tile-0" data-idx="0"><div class="letter">A</div><div class="atext">Choice A</div></div>
+          <div class="ans-tile tile-1" data-idx="1"><div class="letter">B</div><div class="atext">Choice B</div></div>
+          <div class="ans-tile tile-2" data-idx="2"><div class="letter">C</div><div class="atext">Choice C</div></div>
+          <div class="ans-tile tile-3" data-idx="3"><div class="letter">D</div><div class="atext">Choice D</div></div>
+        </div>
+        <div class="spell-overlay" id="spell-freeze-overlay">Frozen!</div>
+      </div>
+      <div class="spell-overlay spell-overlay-full" id="spell-emoji-overlay">
+        <div id="spell-emoji-icon"></div>
+      </div>
     </div>
     <div id="locked-msg">Answer locked in - waiting for reveal...</div>
     <div id="paused-indicator" style="display:none; text-align:center; color:#FFC531; font-weight:800; margin-top:14px;">Game paused</div>
@@ -502,6 +530,27 @@ https://example.com/dance.gif"></textarea>
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-host-song-skip">Skip</button>
       <button class="btn-primary" id="btn-host-song-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== SPELL CAST MODAL (shared by host + player) ===================== -->
+
+<div class="modal-overlay" id="spell-cast-modal">
+  <div class="modal-card" style="max-width:380px; text-align:left; max-height:80vh; overflow-y:auto;">
+    <div class="modal-title" style="text-align:center;">Cast a Spell!</div>
+    <div class="modal-body" style="text-align:center;">You answered fastest 3 times. Pick a spell and who to hit - you have <span id="spell-countdown">10</span>s.</div>
+    <div style="font-weight:800; font-size:14px; margin-bottom:8px;">Spell</div>
+    <div class="duration-row" id="spell-choice-row" style="margin-bottom:16px;">
+      <button type="button" class="duration-btn" data-spell="freeze">Freeze</button>
+      <button type="button" class="duration-btn" data-spell="emoji">Blur</button>
+      <button type="button" class="duration-btn" data-spell="flip">Flip</button>
+    </div>
+    <div style="font-weight:800; font-size:14px; margin-bottom:8px;">Target</div>
+    <div id="spell-target-list" style="margin-bottom:16px;"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" id="btn-spell-skip">Skip</button>
+      <button class="btn-primary" id="btn-spell-cast">Cast</button>
     </div>
   </div>
 </div>
@@ -629,6 +678,99 @@ https://example.com/dance.gif"></textarea>
     }
   });
 
+  /* ---------- shared spell-cast modal (used by both host and player mode) ---------- */
+  var spellSelectedType = null;
+  var spellSelectedTarget = null;
+  var spellCountdownHandle = null;
+  function openSpellCastModal(targets) {
+    spellSelectedType = null;
+    spellSelectedTarget = null;
+    var btns = document.querySelectorAll("#spell-choice-row .duration-btn");
+    for (var i = 0; i < btns.length; i++) btns[i].className = "duration-btn";
+    renderSpellTargetList(targets);
+    $("spell-cast-modal").className = "modal-overlay active";
+    runSpellCountdown(SPELL_CHOICE_WINDOW_MS / 1000);
+  }
+  function hideSpellCastModal() {
+    clearInterval(spellCountdownHandle);
+    $("spell-cast-modal").className = "modal-overlay";
+  }
+  function renderSpellTargetList(targets) {
+    var html = "";
+    for (var i = 0; i < targets.length; i++) {
+      html += '<div class="spell-target-row" data-id="' + escapeHtml(targets[i].id) + '">' + escapeHtml(targets[i].name) + '</div>';
+    }
+    $("spell-target-list").innerHTML = html || '<div style="color:#5B6478; font-size:13px;">No one else to target right now.</div>';
+  }
+  function runSpellCountdown(seconds) {
+    var remaining = seconds;
+    $("spell-countdown").textContent = remaining;
+    clearInterval(spellCountdownHandle);
+    spellCountdownHandle = setInterval(function () {
+      remaining--;
+      if (remaining <= 0) { hideSpellCastModal(); return; }
+      $("spell-countdown").textContent = remaining;
+    }, 1000);
+  }
+  var spellChoiceBtns = document.querySelectorAll("#spell-choice-row .duration-btn");
+  for (var sci = 0; sci < spellChoiceBtns.length; sci++) {
+    (function (btn) {
+      btn.addEventListener("click", function () {
+        spellSelectedType = btn.getAttribute("data-spell");
+        var btns2 = document.querySelectorAll("#spell-choice-row .duration-btn");
+        for (var j = 0; j < btns2.length; j++) btns2[j].className = "duration-btn" + (btns2[j] === btn ? " selected" : "");
+      });
+    })(spellChoiceBtns[sci]);
+  }
+  $("spell-target-list").addEventListener("click", function (e) {
+    var row = e.target.closest(".spell-target-row");
+    if (!row) return;
+    spellSelectedTarget = row.getAttribute("data-id");
+    var rows = document.querySelectorAll(".spell-target-row");
+    for (var i = 0; i < rows.length; i++) rows[i].className = "spell-target-row" + (rows[i] === row ? " selected" : "");
+  });
+  $("btn-spell-skip").addEventListener("click", function () {
+    hideSpellCastModal();
+    if (mode === "host") {
+      if (hostSpellChoiceTimer) clearTimeout(hostSpellChoiceTimer);
+      hostSpellChoicePending = false;
+    } else if (mode === "player" && playerConn) {
+      playerConn.send({ type: "skip_spell" });
+    }
+  });
+  $("btn-spell-cast").addEventListener("click", function () {
+    if (!spellSelectedType || !spellSelectedTarget) { alert("Pick a spell and a target first."); return; }
+    hideSpellCastModal();
+    if (mode === "host") {
+      resolveSpellCast("__HOST__", spellSelectedType, spellSelectedTarget);
+    } else if (mode === "player" && playerConn) {
+      playerConn.send({ type: "cast_spell", spell: spellSelectedType, targetId: spellSelectedTarget });
+    }
+  });
+  // applies the visible/functional effect on whoever's device this runs on - shared by host+player
+  function applySpellEffect(spellType) {
+    if (!spellType) return;
+    if (spellType === "flip") {
+      $("q-flip-wrap").className = "spell-flip";
+    } else if (spellType === "freeze") {
+      answerBlockedUntil = Date.now() + SPELL_EFFECT_MS;
+      $("spell-freeze-overlay").className = "spell-overlay active";
+      setTimeout(function () { $("spell-freeze-overlay").className = "spell-overlay"; }, SPELL_EFFECT_MS);
+    } else if (spellType === "emoji") {
+      answerBlockedUntil = Date.now() + SPELL_EFFECT_MS;
+      var emojis = ["🤖", "🦆", "🍕", "🐙", "🎉", "👻", "🦖", "🍩", "🐸", "🎃"];
+      $("spell-emoji-icon").textContent = emojis[Math.floor(Math.random() * emojis.length)];
+      $("spell-emoji-overlay").className = "spell-overlay spell-overlay-full active";
+      setTimeout(function () { $("spell-emoji-overlay").className = "spell-overlay spell-overlay-full"; }, SPELL_EFFECT_MS);
+    }
+  }
+  function resetSpellVisuals() {
+    $("q-flip-wrap").className = "";
+    $("spell-freeze-overlay").className = "spell-overlay";
+    $("spell-emoji-overlay").className = "spell-overlay spell-overlay-full";
+    answerBlockedUntil = 0;
+  }
+
   /* =========================================================
      LANDING
   ========================================================= */
@@ -696,6 +838,17 @@ https://example.com/dance.gif"></textarea>
   var hostMusicStealUsed = false;
   var MUSIC_STEAL_THRESHOLD = 3;
 
+  /* ---------- spells: 3 fastest-correct answers (cumulative, need not be in a row)
+     lets a participant cast one of 3 effects on another participant's next question ---------- */
+  var SPELL_FASTEST_THRESHOLD = 3;
+  var SPELL_CHOICE_WINDOW_MS = 10000;
+  var SPELL_EFFECT_MS = 5000;
+  var pendingSpellsByTarget = {}; // pid or "__HOST__" -> "freeze"|"emoji"|"flip"
+  var hostSpellFastestCount = 0;
+  var hostSpellChoicePending = false;
+  var hostSpellChoiceTimer = null;
+  var answerBlockedUntil = 0; // shared by host+player: freeze/emoji block answering until this timestamp
+
   /* ---------- soundtrack + pause ---------- */
   var musicIndex = 0;
   var ytPlayer = null;
@@ -756,7 +909,8 @@ https://example.com/dance.gif"></textarea>
       var name = (data.name || "Player").substring(0, 16);
       connections[conn.peer] = {
         conn: conn, name: name, score: 0, missedStreak: 0, inactivityPending: false, inactivityTimer: null,
-        chosenGif: null, chosenSong: null, musicStreak: 0, musicStealUsed: false
+        chosenGif: null, chosenSong: null, musicStreak: 0, musicStealUsed: false,
+        spellFastestCount: 0, spellChoicePending: false, spellChoiceTimer: null, answerBlockedUntil: 0
       };
       var joinPayload = pickerStateFieldsFor(conn.peer);
       joinPayload.type = "join_accepted";
@@ -772,6 +926,8 @@ https://example.com/dance.gif"></textarea>
       if (phase !== "question" || gamePaused) return;
       var pid = conn.peer;
       if (answersThisRound[pid]) return;
+      var pc = connections[pid];
+      if (pc && Date.now() < pc.answerBlockedUntil) return; // freeze/blur spell still in effect
       answersThisRound[pid] = { choice: data.choice, timeMs: Date.now() - questionStartTime };
       updateHostAnsweredCount();
       checkAllPlayersAnswered();
@@ -800,6 +956,22 @@ https://example.com/dance.gif"></textarea>
       }
       songPicker.chosenSong = data.url;
       syncPickersToPlayers();
+      return;
+    }
+
+    if (data.type === "cast_spell") {
+      var caster = connections[conn.peer];
+      if (!caster || !caster.spellChoicePending) return;
+      resolveSpellCast(conn.peer, data.spell, data.targetId);
+      return;
+    }
+
+    if (data.type === "skip_spell") {
+      var skipper = connections[conn.peer];
+      if (skipper && skipper.spellChoicePending) {
+        if (skipper.spellChoiceTimer) clearTimeout(skipper.spellChoiceTimer);
+        skipper.spellChoicePending = false;
+      }
       return;
     }
 
@@ -1111,6 +1283,8 @@ https://example.com/dance.gif"></textarea>
     var startKeys = Object.keys(connections);
     for (var s = 0; s < startKeys.length; s++) {
       connections[startKeys[s]].missedStreak = 0;
+      connections[startKeys[s]].spellFastestCount = 0;
+      connections[startKeys[s]].spellChoicePending = false;
     }
 
     ensureYtPlayer(); // warm it up now so it's ready by the time picking is done
@@ -1124,6 +1298,9 @@ https://example.com/dance.gif"></textarea>
     hostChosenSong = null;
     hostMusicStreak = 0;
     hostMusicStealUsed = false;
+    hostSpellFastestCount = 0;
+    hostSpellChoicePending = false;
+    pendingSpellsByTarget = {};
 
     if (gifLinks.length > 0) {
       openHostGifPickModal();
@@ -1212,10 +1389,12 @@ https://example.com/dance.gif"></textarea>
 
     clearInterval(timerHandle);
     clearTimeout(hostInactivityTimer);
+    clearTimeout(hostSpellChoiceTimer);
     var ck = Object.keys(connections);
     for (var i = 0; i < ck.length; i++) {
       var c = connections[ck[i]];
       if (c.inactivityTimer) clearTimeout(c.inactivityTimer);
+      if (c.spellChoiceTimer) clearTimeout(c.spellChoiceTimer);
       try { c.conn.send({ type: "host_ended" }); } catch (e) {}
     }
     if (ytPlayer) { try { ytPlayer.stopVideo(); } catch (e) {} }
@@ -1227,6 +1406,9 @@ https://example.com/dance.gif"></textarea>
     currentQ = -1;
     phase = "lobby";
     gamePaused = false;
+    pendingSpellsByTarget = {};
+    hostSpellFastestCount = 0;
+    hostSpellChoicePending = false;
     renderLobby();
 
     $("host-strip").style.display = "none";
@@ -1258,6 +1440,7 @@ https://example.com/dance.gif"></textarea>
     gamePaused = false;
     $("btn-pause-game").textContent = "Pause";
     $("paused-indicator").style.display = "none";
+    resetSpellVisuals();
 
     $("q-progress").textContent = "QUESTION " + (currentQ + 1);
     $("q-text").textContent = q.text;
@@ -1268,20 +1451,37 @@ https://example.com/dance.gif"></textarea>
     updateHostAnsweredCount();
     show("screen-question");
 
+    if (pendingSpellsByTarget["__HOST__"]) {
+      applySpellEffect(pendingSpellsByTarget["__HOST__"]);
+      delete pendingSpellsByTarget["__HOST__"];
+    }
+
     questionStartTime = Date.now();
-    broadcast({
-      type: "question",
-      index: currentQ,
-      text: q.text,
-      choices: q.choices,
-      seconds: TIMER_SECONDS
-    });
+    var allPids = Object.keys(connections);
+    for (var pqi = 0; pqi < allPids.length; pqi++) {
+      var pqid = allPids[pqi];
+      var payload = {
+        type: "question",
+        index: currentQ,
+        text: q.text,
+        choices: q.choices,
+        seconds: TIMER_SECONDS
+      };
+      if (pendingSpellsByTarget[pqid]) {
+        payload.spell = pendingSpellsByTarget[pqid];
+        if (payload.spell === "freeze" || payload.spell === "emoji") {
+          connections[pqid].answerBlockedUntil = Date.now() + SPELL_EFFECT_MS;
+        }
+        delete pendingSpellsByTarget[pqid];
+      }
+      try { connections[pqid].conn.send(payload); } catch (e) {}
+    }
 
     startTimer();
   }
 
   function hostChoose(idx) {
-    if (hostAnswerLocked || gamePaused) return;
+    if (hostAnswerLocked || gamePaused || Date.now() < answerBlockedUntil) return;
     hostPick = idx;
     hostPickTime = Date.now();
     hostOptedOut = false; // answering means they're back in, even if they'd opted out earlier
@@ -1500,6 +1700,7 @@ https://example.com/dance.gif"></textarea>
     var gifWinnerUrl = findGifWinner(roundResults);
     var musicStealUrl = updateMusicStreaksAndSteal(roundResults);
     if (musicStealUrl) stealMusicTo(musicStealUrl);
+    awardSpellProgress(findFastestCorrectId(roundResults));
 
     setTimeout(function () {
       if (!gifWinnerUrl) { goToScoreboard(); return; }
@@ -1567,6 +1768,84 @@ https://example.com/dance.gif"></textarea>
     if (crossed.length === 0) return null;
     crossed.sort(function (a, b) { return a.timeMs - b.timeMs; });
     return crossed[0].url;
+  }
+
+  /* ---------- spells: 3 cumulative fastest-correct answers (need not be in a row) earns
+     a cast on another participant's next question ---------- */
+  function findFastestCorrectId(roundResults) {
+    var best = null;
+    for (var i = 0; i < roundResults.length; i++) {
+      var r = roundResults[i];
+      if (!r.correct) continue;
+      if (!best || r.timeMs < best.timeMs) best = r;
+    }
+    return best ? best.id : null;
+  }
+  function awardSpellProgress(winnerId) {
+    if (!winnerId) return;
+    if (winnerId === "__HOST__") {
+      if (hostSpellChoicePending) return;
+      hostSpellFastestCount++;
+      if (hostSpellFastestCount >= SPELL_FASTEST_THRESHOLD) {
+        hostSpellFastestCount = 0;
+        offerSpellChoiceToHost();
+      }
+    } else {
+      var c = connections[winnerId];
+      if (!c || c.spellChoicePending) return;
+      c.spellFastestCount++;
+      if (c.spellFastestCount >= SPELL_FASTEST_THRESHOLD) {
+        c.spellFastestCount = 0;
+        offerSpellChoiceToPlayer(winnerId);
+      }
+    }
+  }
+  // everyone currently connected except the caster and anyone who already has a spell queued on them
+  function buildSpellTargetList(excludePid) {
+    var list = [];
+    var keys = Object.keys(connections);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i] === excludePid || pendingSpellsByTarget[keys[i]]) continue;
+      list.push({ id: keys[i], name: connections[keys[i]].name });
+    }
+    if (excludePid !== "__HOST__" && !pendingSpellsByTarget["__HOST__"]) {
+      list.push({ id: "__HOST__", name: "Host" });
+    }
+    return list;
+  }
+  function offerSpellChoiceToPlayer(pid) {
+    var c = connections[pid];
+    if (!c) return;
+    c.spellChoicePending = true;
+    try { c.conn.send({ type: "spell_choice_offer", targets: buildSpellTargetList(pid) }); } catch (e) {}
+    c.spellChoiceTimer = setTimeout(function () { c.spellChoicePending = false; }, SPELL_CHOICE_WINDOW_MS);
+  }
+  function offerSpellChoiceToHost() {
+    hostSpellChoicePending = true;
+    openSpellCastModal(buildSpellTargetList("__HOST__"), "__HOST__");
+    hostSpellChoiceTimer = setTimeout(function () {
+      hostSpellChoicePending = false;
+      $("spell-cast-modal").className = "modal-overlay";
+    }, SPELL_CHOICE_WINDOW_MS);
+  }
+  function resolveSpellCast(casterId, spell, targetId) {
+    var validTargets = buildSpellTargetList(casterId);
+    var isValidTarget = false;
+    for (var i = 0; i < validTargets.length; i++) { if (validTargets[i].id === targetId) isValidTarget = true; }
+    if (!isValidTarget || ["freeze", "emoji", "flip"].indexOf(spell) === -1) return;
+
+    pendingSpellsByTarget[targetId] = spell;
+
+    if (casterId === "__HOST__") {
+      if (hostSpellChoiceTimer) clearTimeout(hostSpellChoiceTimer);
+      hostSpellChoicePending = false;
+    } else {
+      var c = connections[casterId];
+      if (c) {
+        if (c.spellChoiceTimer) clearTimeout(c.spellChoiceTimer);
+        c.spellChoicePending = false;
+      }
+    }
   }
 
   function goToScoreboard() {
@@ -1866,6 +2145,7 @@ https://example.com/dance.gif"></textarea>
       return;
     }
     if (data.type === "picker_update") { renderWaitingPickers(data); return; }
+    if (data.type === "spell_choice_offer") { openSpellCastModal(data.targets || []); return; }
     if (data.type === "question") { startPlayerQuestion(data); return; }
     if (data.type === "reveal") { showPlayerReveal(data); return; }
     if (data.type === "scoreboard") { showPlayerScoreboard(data.rows, data.yourRank, data.yourRow); return; }
@@ -1902,6 +2182,7 @@ https://example.com/dance.gif"></textarea>
     hasAnsweredThisRound = false;
     playerPaused = false;
     $("paused-indicator").style.display = "none";
+    resetSpellVisuals();
     $("q-progress").textContent = "QUESTION " + (data.index + 1);
     $("q-text").textContent = data.text;
     $("locked-msg").style.display = "none";
@@ -1912,6 +2193,7 @@ https://example.com/dance.gif"></textarea>
 
     show("screen-question");
     runPlayerTimer(data.seconds);
+    if (data.spell) applySpellEffect(data.spell);
   }
 
   function runPlayerTimer(totalSeconds, startRemaining) {
@@ -1947,7 +2229,7 @@ https://example.com/dance.gif"></textarea>
   }
 
   function submitPlayerAnswer(idx) {
-    if (hasAnsweredThisRound || playerPaused) return;
+    if (hasAnsweredThisRound || playerPaused || Date.now() < answerBlockedUntil) return;
     hasAnsweredThisRound = true;
 
     var tiles = document.querySelectorAll(".ans-tile");
