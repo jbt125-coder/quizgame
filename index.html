@@ -1441,6 +1441,12 @@ https://example.com/dance.gif"></textarea>
     $("btn-pause-game").textContent = "Pause";
     $("paused-indicator").style.display = "none";
     resetSpellVisuals();
+    // an unresolved spell choice never outlives the round it was offered in
+    if (hostSpellChoicePending) {
+      if (hostSpellChoiceTimer) clearTimeout(hostSpellChoiceTimer);
+      hostSpellChoicePending = false;
+    }
+    hideSpellCastModal();
 
     $("q-progress").textContent = "QUESTION " + (currentQ + 1);
     $("q-text").textContent = q.text;
@@ -1460,6 +1466,12 @@ https://example.com/dance.gif"></textarea>
     var allPids = Object.keys(connections);
     for (var pqi = 0; pqi < allPids.length; pqi++) {
       var pqid = allPids[pqi];
+      var pqc = connections[pqid];
+      // an unresolved spell choice never outlives the round it was offered in
+      if (pqc.spellChoicePending) {
+        if (pqc.spellChoiceTimer) clearTimeout(pqc.spellChoiceTimer);
+        pqc.spellChoicePending = false;
+      }
       var payload = {
         type: "question",
         index: currentQ,
@@ -2183,6 +2195,7 @@ https://example.com/dance.gif"></textarea>
     playerPaused = false;
     $("paused-indicator").style.display = "none";
     resetSpellVisuals();
+    hideSpellCastModal(); // a spell choice offer never outlives the round it was made in
     $("q-progress").textContent = "QUESTION " + (data.index + 1);
     $("q-text").textContent = data.text;
     $("locked-msg").style.display = "none";
