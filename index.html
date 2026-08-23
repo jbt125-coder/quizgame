@@ -375,6 +375,14 @@ Answer: B"></textarea>
     for (var i = 0; i < 4; i++) s += Math.floor(Math.random() * 10);
     return s;
   }
+  function shuffle(arr) {
+    var out = arr.slice();
+    for (var i = out.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = out[i]; out[i] = out[j]; out[j] = tmp;
+    }
+    return out;
+  }
 
   var TIMER_SECONDS = 15;
   var SCOREBOARD_PAUSE_SECONDS = 5;
@@ -607,7 +615,7 @@ Answer: B"></textarea>
     if (Object.keys(connections).length === 0) {
       if (!confirm("No players have joined yet. Start anyway?")) return;
     }
-    questions = parsed;
+    questions = shuffle(parsed);
     currentQ = -1;
     hostScore = 0;
     gameEndsAt = Date.now() + gameDurationMs;
